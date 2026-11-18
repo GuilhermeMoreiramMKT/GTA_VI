@@ -49,3 +49,5 @@ O workflow GitHub Actions já concluiu o typecheck e o build da V1 com sucesso n
 Consulte [docs/AUTOMATION_V2.md](docs/AUTOMATION_V2.md). O worker externo e as integrações exigem configuração, direitos de uso e testes antes da ativação.
 
 <!-- Preview rebuild after Supabase environment configuration, 2026-11-18 -->
+
+<!-- Preview rebuild after YouTube API configuration -->
