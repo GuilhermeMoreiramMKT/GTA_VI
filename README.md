@@ -44,3 +44,6 @@ O aplicativo exibe uma tela de configuração enquanto essas variáveis estivere
 O workflow GitHub Actions já concluiu o typecheck e o build da V1 com sucesso na branch de desenvolvimento. Renderização de vídeo, publicação automática e OAuth de redes sociais ainda não foram implementados. O sistema não verifica automaticamente direitos autorais ou a veracidade de todos os conteúdos; mantenha revisão editorial.
 
 **Segurança:** o repositório é público. Não commitar tokens, senhas ou segredos. Implantar apenas como Preview até concluir testes de acesso e integrações.
+
+## V2 — automação
+Consulte [docs/AUTOMATION_V2.md](docs/AUTOMATION_V2.md). O worker externo e as integrações exigem configuração, direitos de uso e testes antes da ativação.
