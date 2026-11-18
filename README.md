@@ -51,3 +51,5 @@ Consulte [docs/AUTOMATION_V2.md](docs/AUTOMATION_V2.md). O worker externo e as i
 <!-- Preview rebuild after Supabase environment configuration, 2026-11-18 -->
 
 <!-- Preview rebuild after YouTube API configuration -->
+
+<!-- Preview rebuild after OpenAI API configuration -->
