@@ -1,0 +1,8 @@
+import type {Trend} from "./radar";
+const url=process.env.SUPABASE_URL,token=process.env.SUPABASE_SERVICE_ROLE_KEY;
+export const databaseReady=()=>Boolean(url&&token);
+async function query(endpoint:string,init:RequestInit={}){if(!url||!token)throw Error("Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY");const r=await fetch(url.replace(/\/$/,"")+"/rest/v1/"+endpoint,{...init,headers:{apikey:token,Authorization:"Bearer "+token,"Content-Type":"application/json",...(init.headers??{})},cache:"no-store"});if(!r.ok)throw Error("Supabase "+r.status);const s=await r.text();return s?JSON.parse(s):[]}
+export async function store(items:Trend[]){if(!items.length)return;await query("trends?on_conflict=id",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify(items.map(x=>({id:x.id,title:x.title,description:x.description,url:x.url,channel:x.channel,source:x.source,published_at:x.publishedAt,views:x.views,likes:x.likes,comments:x.comments,thumbnail:x.thumbnail,score:x.score,category:x.category})))})}
+export async function read():Promise<Trend[]>{const rows=await query("trends?select=*&order=score.desc&limit=100");return rows.map((x:any)=>({id:x.id,title:x.title,description:x.description,url:x.url,channel:x.channel,source:x.source,publishedAt:x.published_at,views:x.views,likes:x.likes,comments:x.comments,thumbnail:x.thumbnail,score:x.score,category:x.category}))}
+export async function saveDraft(d:{trend_id:string;title:string;script:string;caption:string;source_url:string}){const xs=await query("drafts",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify(d)});return xs[0]}
+export async function drafts(){return query("drafts?select=*&order=created_at.desc&limit=100")}

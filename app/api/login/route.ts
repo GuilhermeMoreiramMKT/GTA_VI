@@ -1,0 +1,2 @@
+import{NextResponse}from"next/server";import{configured,login,validPassword}from"../../../lib/security";
+export async function POST(req:Request){if(!configured())return NextResponse.json({error:"Credenciais não configuradas"},{status:503});let x;try{x=await req.json()}catch{return NextResponse.json({error:"Requisição inválida"},{status:400})}if(typeof x.password!=="string"||!validPassword(x.password))return NextResponse.json({error:"Senha incorreta"},{status:401});await login();return NextResponse.json({ok:true})}
