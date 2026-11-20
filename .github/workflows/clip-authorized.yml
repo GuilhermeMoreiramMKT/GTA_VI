@@ -1,0 +1,66 @@
+name: Clip authorized video
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Authorized source video URL'
+        required: true
+        type: string
+      start:
+        description: 'Start time in seconds'
+        required: true
+        default: '0'
+        type: string
+      duration:
+        description: 'Clip duration in seconds (maximum 45)'
+        required: true
+        default: '30'
+        type: string
+jobs:
+  clip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Validate inputs
+        env:
+          START: ${{ inputs.start }}
+          DURATION: ${{ inputs.duration }}
+          VIDEO_URL: ${{ inputs.video_url }}
+        run: |
+          python3 - <<'PY'
+          import os, math
+          from urllib.parse import urlparse
+          url = urlparse(os.environ['VIDEO_URL'])
+          assert url.scheme == 'https' and url.hostname, 'HTTPS URL required'
+          start = float(os.environ['START'])
+          duration = float(os.environ['DURATION'])
+          assert math.isfinite(start) and start >= 0
+          assert math.isfinite(duration) and 1 <= duration <= 45
+          PY
+      - name: Install video tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          python3 -m pip install --user --upgrade yt-dlp
+      - name: Download authorized source
+        env:
+          VIDEO_URL: ${{ inputs.video_url }}
+        run: |
+          mkdir -p output
+          "$HOME/.local/bin/yt-dlp" --no-playlist --max-filesize 2G --merge-output-format mp4 -o 'source.%(ext)s' "$VIDEO_URL"
+      - name: Render vertical clip
+        env:
+          START: ${{ inputs.start }}
+          DURATION: ${{ inputs.duration }}
+        run: |
+          INPUT="$(find . -maxdepth 1 -name 'source.*' -type f | head -n 1)"
+          test -n "$INPUT"
+          ffmpeg -hide_banner -loglevel error -ss "$START" -i "$INPUT" -t "$DURATION" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" -c:v libx264 -preset veryfast -crf 23 -c:a aac -movflags +faststart output/clip.mp4
+      - name: Upload clip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gta-viral-clip
+          path: output/clip.mp4
+          retention-days: 1
