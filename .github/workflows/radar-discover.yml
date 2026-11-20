@@ -1,0 +1,37 @@
+name: GTA Viral Radar - coleta horaria
+
+on:
+  schedule:
+    - cron: '7 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gta-viral-radar-discover
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validar configuracao
+        env:
+          RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$RADAR_BASE_URL" || { echo "::error::Configure RADAR_BASE_URL em Actions secrets"; exit 1; }
+          test -n "$CRON_SECRET" || { echo "::error::Configure CRON_SECRET em Actions secrets"; exit 1; }
+      - name: Executar coleta no painel
+        env:
+          RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          base="${RADAR_BASE_URL%/}"
+          case "$base" in https://*) ;; *) echo "::error::RADAR_BASE_URL deve usar HTTPS"; exit 1 ;; esac
+          curl --fail-with-body --show-error --silent --retry 2 --retry-delay 5 \
+            --max-time 90 \
+            --header "Authorization: Bearer $CRON_SECRET" \
+            "$base/api/cron/discover"
