@@ -20,15 +20,22 @@ export async function GET(req:NextRequest){
   if(!tokenResponse.ok)return fail("token_exchange_failed");
   const data=await tokenResponse.json();
   if(typeof data.access_token!=="string"||typeof data.refresh_token!=="string")return fail("invalid_token");
-  // Encrypted, HTTP-only cookie for the initial account-link flow. Not a durable collector credential.
+  // Encrypt OAuth tokens at rest, then persist server-side.
   const key=createHash("sha256").update(session+":twitch").digest();
   const iv=randomBytes(12),cipher=createCipheriv("aes-256-gcm",key,iv);
   const plaintext=JSON.stringify({access_token:data.access_token,refresh_token:data.refresh_token,expires_at:Date.now()+Number(data.expires_in??3600)*1000});
   const encrypted=Buffer.concat([cipher.update(plaintext,"utf8"),cipher.final()]);
   const value=Buffer.concat([iv,cipher.getAuthTag(),encrypted]).toString("base64url");
-  const r=NextResponse.redirect(origin+"/?twitch=connected");
-  r.cookies.delete("twitch_oauth_state");
-  r.cookies.set("twitch_oauth_link",value,{httpOnly:true,secure:true,sameSite:"lax",path:"/",maxAge:3600});
-  return r;
+  const dbUrl=process.env.SUPABASE_URL,dbKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if(!dbUrl||!dbKey)return fail("database_not_configured");
+  const stored=await fetch(dbUrl.replace(/\\/$/,"")+"/rest/v1/twitch_connections?on_conflict=id",{
+   method:"POST",headers:{apikey:dbKey,Authorization:"Bearer "+dbKey,"Content-Type":"application/json",Prefer:"resolution=merge-duplicates,return=minimal"},
+   body:JSON.stringify([{id:"primary",encrypted_tokens:value,updated_at:new Date().toISOString()}]),cache:"no-store"
+  });
+  if(!stored.ok)return fail("database_write_failed");
+  const response=NextResponse.redirect(origin+"/?twitch=connected");
+  response.cookies.delete("twitch_oauth_state");
+  response.cookies.delete("twitch_oauth_link");
+  return response;
  }catch{return fail("connection_failed")}
 }
