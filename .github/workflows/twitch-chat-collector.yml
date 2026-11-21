@@ -1,7 +1,5 @@
 name: GTA Viral Radar - Twitch chat collector
 on:
-  schedule:
-    - cron: '*/10 * * * *'
   workflow_dispatch:
 permissions:
   contents: read
