@@ -50,7 +50,7 @@ function connect(url){
  ws.addEventListener("close",()=>{connected=false;console.log("EventSub socket closed")});
 }
 connect("wss://eventsub.wss.twitch.tv/ws");
-const interval=setInterval(()=>{safeFlush().catch(e=>console.error(String(e)))},60_000);
+const interval=setInterval(()=>{safeFlush().catch(e=>console.error(String(e)))},7*60_000);
 while(Date.now()<endAt){await new Promise(resolve=>setTimeout(resolve,5000));if(!connected&&Date.now()<endAt-30_000){console.log("WebSocket disconnected; retrying");connect("wss://eventsub.wss.twitch.tv/ws")}}
 clearInterval(interval);ws?.close();await safeFlush();console.log("Collector finished; subscriptions",subscriptions);
 if(!subscriptions)process.exitCode=1;
