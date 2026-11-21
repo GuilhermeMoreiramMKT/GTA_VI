@@ -18,3 +18,10 @@ O gerador editorial usa `EDITORIAL_ENGINE=local` por padrão, mesmo que `OPENAI_
 
 ## Próxima etapa técnica
 Adicionar processamento de mídia **somente de arquivos fornecidos/autorizados**, transcrição local, extração de segmentos e edição FFmpeg em um workflow isolado. Testar com amostra curta antes de ativar qualquer rotina recorrente.
+
+## Descoberta de streamers
+A busca agora consulta dois grupos por ciclo: streamers prioritários e descoberta aberta de GTA VI. Configure na Vercel a variável opcional `RADAR_PRIORITY_CHANNELS=Coringa,Nome do Canal 2` (nomes separados por vírgula). O padrão é Coringa. Vídeos cujo nome de canal corresponda a um prioritário recebem +12 pontos no ranking (limitado a 100). O score mede popularidade e prioridade, **não** comprova a existência de um trecho viral dentro da live.
+
+A implementação atual usa nomes de canais como heurística; para precisão contra homônimos, uma evolução deve usar IDs oficiais de canal. Busca de YouTube custa cerca de 100 unidades por chamada: duas buscas por hora consomem aproximadamente 4.800 unidades/dia, sem contar consultas de estatísticas, dentro da cota padrão de 10.000 unidades/dia caso não haja outros consumos.
+
+Apenas a descoberta está implementada aqui; não há download, clipagem nem postagem automática.
