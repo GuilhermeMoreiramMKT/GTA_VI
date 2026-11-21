@@ -25,3 +25,10 @@ A busca agora consulta dois grupos por ciclo: streamers prioritários e descober
 A implementação atual usa nomes de canais como heurística; para precisão contra homônimos, uma evolução deve usar IDs oficiais de canal. Busca de YouTube custa cerca de 100 unidades por chamada: duas buscas por hora consomem aproximadamente 4.800 unidades/dia, sem contar consultas de estatísticas, dentro da cota padrão de 10.000 unidades/dia caso não haja outros consumos.
 
 Apenas a descoberta está implementada aqui; não há download, clipagem nem postagem automática.
+
+## Twitch: detecção de momentos pelo chat (módulo inicial)
+O módulo `lib/twitch-chat.ts` aceita mensagens com horário, identificador do participante e texto. Analisa os últimos dez minutos em intervalos de um minuto, compara a intensidade com uma linha de base local, mede diversidade de participantes e procura sinais de surpresa, risada e pedidos de corte. Retorna horários candidatos de 40 segundos, pontuação e justificativa. **É um detector heurístico, não uma IA que assiste ao vídeo.**
+
+**Ainda não está conectado à Twitch**: é necessário registrar um aplicativo na Twitch, obter credenciais OAuth apropriadas, assinar eventos de chat pela API/EventSub com as permissões necessárias, executar um coletor persistente, armazenar mensagens com retenção mínima e chamar `analyzeChat` a cada dez minutos. O GitHub Actions horário não é um coletor persistente adequado para chat em tempo real. Também é preciso correlacionar o timestamp do chat com a gravação/VOD antes de gerar o corte; clips e VODs dependem de disponibilidade e permissões da plataforma. Evitar armazenar texto de chat desnecessariamente após a análise.
+
+O score de chat não garante que o conteúdo seja relevante para GTA VI nem que o corte esteja pronto para publicar. Testar o algoritmo em chats reais, ajustar limiares por streamer e validar visualmente antes da automação de postagem.
