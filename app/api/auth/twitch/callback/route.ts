@@ -28,7 +28,7 @@ export async function GET(req:NextRequest){
   const value=Buffer.concat([iv,cipher.getAuthTag(),encrypted]).toString("base64url");
   const dbUrl=process.env.SUPABASE_URL,dbKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
   if(!dbUrl||!dbKey)return fail("database_not_configured");
-  const stored=await fetch(dbUrl.replace(/\\/$/,"")+"/rest/v1/twitch_connections?on_conflict=id",{
+  const stored=await fetch(dbUrl.replace(/\/$/,"")+"/rest/v1/twitch_connections?on_conflict=id",{
    method:"POST",headers:{apikey:dbKey,Authorization:"Bearer "+dbKey,"Content-Type":"application/json",Prefer:"resolution=merge-duplicates,return=minimal"},
    body:JSON.stringify([{id:"primary",encrypted_tokens:value,updated_at:new Date().toISOString()}]),cache:"no-store"
   });
