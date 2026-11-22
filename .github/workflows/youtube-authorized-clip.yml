@@ -1,0 +1,78 @@
+name: GTA Viral Radar - YouTube authorized clip test
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Public YouTube VOD URL (authorized content only)'
+        required: true
+        default: 'https://www.youtube.com/watch?v=mQ4CfLekrFI'
+        type: string
+      start_seconds:
+        description: 'Start offset in seconds'
+        required: true
+        default: '0'
+        type: string
+      duration_seconds:
+        description: 'Clip duration (30-45 seconds)'
+        required: true
+        default: '40'
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: youtube-clip-test-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  clip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Validate request
+        env:
+          VIDEO_URL: ${{ inputs.video_url }}
+          START: ${{ inputs.start_seconds }}
+          DURATION: ${{ inputs.duration_seconds }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os,urllib.parse
+          url=os.environ['VIDEO_URL']
+          p=urllib.parse.urlparse(url)
+          assert p.scheme=='https' and p.hostname in ('youtube.com','www.youtube.com','m.youtube.com','youtu.be'), 'Only YouTube HTTPS URLs allowed'
+          assert 0<=int(os.environ['START'])<=86400, 'Invalid start offset'
+          assert 30<=int(os.environ['DURATION'])<=45, 'Duration must be 30-45 seconds'
+          PY
+      - name: Install video tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python3 -m pip install --user --upgrade yt-dlp
+      - name: Extract authorized clip
+        env:
+          VIDEO_URL: ${{ inputs.video_url }}
+          START: ${{ inputs.start_seconds }}
+          DURATION: ${{ inputs.duration_seconds }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          end=$((START + DURATION))
+          mkdir -p output
+          "$HOME/.local/bin/yt-dlp" --no-playlist --no-progress --socket-timeout 20 --retries 2 \
+            --download-sections "*${START}-${end}" \
+            --force-keyframes-at-cuts \
+            -f 'bv*[height<=1080]+ba/b[height<=1080]/b' \
+            --merge-output-format mp4 -o 'output/source.%(ext)s' "$VIDEO_URL"
+          source_file="$(find output -maxdepth 1 -type f | head -n 1)"
+          test -n "$source_file"
+          ffmpeg -hide_banner -loglevel error -y -i "$source_file" \
+            -t "$DURATION" -vf 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920' \
+            -c:v libx264 -preset veryfast -crf 25 -c:a aac -b:a 128k \
+            -movflags +faststart output/vertical-clip.mp4
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 output/vertical-clip.mp4
+      - name: Save clip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-vertical-clip
+          path: output/vertical-clip.mp4
+          if-no-files-found: error
+          retention-days: 1
