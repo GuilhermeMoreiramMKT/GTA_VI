@@ -1,0 +1,64 @@
+name: GTA Viral Radar - VOD partial clip
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'youtube (public VOD) or direct (public HTTPS MP4)'
+        required: true
+        type: choice
+        options:
+          - youtube
+          - direct
+        default: youtube
+      video_url:
+        description: 'YouTube video URL or direct HTTPS video file URL'
+        required: true
+        type: string
+        default: 'https://www.youtube.com/watch?v=mQ4CfLekrFI'
+      start_seconds:
+        description: 'Clip start in seconds (e.g. 4800 for 01:20:00)'
+        required: true
+        type: string
+        default: '0'
+      duration_seconds:
+        description: '30 to 45 seconds'
+        required: true
+        type: string
+        default: '40'
+permissions:
+  contents: read
+concurrency:
+  group: gta-vod-partial-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  clip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install FFmpeg and yt-dlp
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python3 -m pip install --user --upgrade yt-dlp
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Extract only requested interval and render vertical clip
+        env:
+          SOURCE: ${{ inputs.source }}
+          VIDEO_URL: ${{ inputs.video_url }}
+          START: ${{ inputs.start_seconds }}
+          DURATION: ${{ inputs.duration_seconds }}
+        run: |
+          python3 scripts/clip_vod.py \
+            --source "$SOURCE" \
+            --url "$VIDEO_URL" \
+            --start "$START" \
+            --duration "$DURATION"
+      - name: Upload result
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gta-vod-vertical-clip
+          path: output/vertical-clip.mp4
+          retention-days: 3
+          if-no-files-found: error
