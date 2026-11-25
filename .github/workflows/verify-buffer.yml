@@ -1,0 +1,64 @@
+name: Verify Buffer social connection
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+    steps:
+      - name: Check Buffer and connected social channels
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          key = os.environ.get("BUFFER_API_KEY", "").strip()
+          if not key:
+              sys.exit("Missing BUFFER_API_KEY repository secret")
+
+          def query(document):
+              request = urllib.request.Request(
+                  "https://api.buffer.com",
+                  data=json.dumps({"query": document}).encode("utf-8"),
+                  headers={
+                      "Content-Type": "application/json",
+                      "Authorization": "Bearer " + key,
+                  },
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=20) as response:
+                      result = json.load(response)
+              except urllib.error.HTTPError as error:
+                  sys.exit(f"Buffer HTTP error {error.code}")
+              except (OSError, ValueError):
+                  sys.exit("Buffer request or response failed")
+              if result.get("errors") or not isinstance(result.get("data"), dict):
+                  sys.exit("Buffer GraphQL query failed; check permissions")
+              return result["data"]
+
+          account = query("query { account { organizations { id } } }").get("account")
+          if not account:
+              sys.exit("Buffer account unavailable")
+          organizations = account.get("organizations") or []
+          matching_orgs = 0
+          for organization in organizations:
+              org_id = json.dumps(organization["id"])
+              document = "query { channels(input: { organizationId: " + org_id + " }) { service } }"
+              channels = query(document).get("channels") or []
+              services = {str(channel.get("service", "")).lower() for channel in channels}
+              if {"instagram", "tiktok"}.issubset(services):
+                  matching_orgs += 1
+          print("Buffer authentication: OK")
+          print(f"Organizations with both Instagram and TikTok: {matching_orgs}")
+          if matching_orgs != 1:
+              sys.exit("Connect both channels in exactly one intended organization or resolve ambiguity")
+          print("Social channels detected. No publication created.")
+          PY
