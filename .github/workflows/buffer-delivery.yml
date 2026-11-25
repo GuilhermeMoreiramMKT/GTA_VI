@@ -1,0 +1,74 @@
+name: GTA Viral Radar - Buffer delivery
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Smoke test as drafts or run the production delivery cycle'
+        type: choice
+        options: [smoke, schedule]
+        default: smoke
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/buffer-delivery.yml'
+  schedule:
+    - cron: '23 * * * *'
+permissions: {}
+concurrency:
+  group: radar-buffer-delivery
+  cancel-in-progress: false
+jobs:
+  smoke:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'smoke')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Wait for updated production endpoint
+        env:
+          RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$RADAR_BASE_URL" && test -n "$CRON_SECRET"
+          case "$RADAR_BASE_URL" in https://gta-viral-radar.vercel.app|https://gta-viral-radar.vercel.app/) ;; *) echo "Unexpected radar URL"; exit 1;; esac
+          for attempt in {1..24}; do
+            code=$(curl -sS --max-time 30 -o /tmp/radar-health.json -w '%{http_code}' -X POST --header "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/buffer?action=health" || true)
+            if [ "$code" = 200 ]; then cat /tmp/radar-health.json; exit 0; fi
+            if [ "$code" = 401 ] || [ "$code" = 502 ]; then cat /tmp/radar-health.json; exit 1; fi
+            sleep 10
+          done
+          echo "Production endpoint did not become available"; exit 1
+      - name: Render the authorized Coringa sample
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --upgrade 'yt-dlp==2026.11.23'
+          python3 -m yt_dlp --ignore-config --no-cache-dir --no-progress --socket-timeout 15 --retries 1 -f 'bv*[height<=720]+ba/b[height<=720]/b' --merge-output-format mp4 -o /tmp/coringa-source.mp4 'https://kick.com/coringa/clips/clip_01M7V8SCRC2ZP81Y679PV8X30N'
+          ffmpeg -v error -nostdin -ss 17 -i /tmp/coringa-source.mp4 -t 35 -map 0:v:0 -map 0:a:0 \
+            -vf "scale=1080:1920:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='A REAÇÃO DO CORINGA':fontsize=72:fontcolor=white:x=(w-tw)/2:y=280,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='DEPOIS DESSA CENA!':fontsize=66:fontcolor=0xFFE000:x=(w-tw)/2:y=383" \
+            -c:v libx264 -preset fast -b:v 600k -maxrate 650k -bufsize 1200k -pix_fmt yuv420p -c:a aac -b:a 96k -movflags +faststart /tmp/radar-smoke.mp4
+          ffprobe -v error -show_entries 'format=duration,size:stream=codec_type,width,height' -of json /tmp/radar-smoke.mp4
+          test "$(stat -c %s /tmp/radar-smoke.mp4)" -lt 3900000
+      - name: Deliver one test draft per connected channel
+        env:
+          RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent --max-time 80 \
+            --header "Authorization: Bearer $CRON_SECRET" --header 'Content-Type: video/mp4' \
+            --data-binary @/tmp/radar-smoke.mp4 "${RADAR_BASE_URL%/}/api/cron/buffer?action=smoke"
+  schedule:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'schedule')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Deliver the next eligible rendered job
+        env:
+          RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$RADAR_BASE_URL" && test -n "$CRON_SECRET"
+          case "$RADAR_BASE_URL" in https://gta-viral-radar.vercel.app|https://gta-viral-radar.vercel.app/) ;; *) echo "Unexpected radar URL"; exit 1;; esac
+          curl --fail-with-body --show-error --silent --max-time 80 -X POST \
+            --header "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/buffer?action=schedule"
