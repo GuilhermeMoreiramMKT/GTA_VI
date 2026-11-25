@@ -41,6 +41,8 @@ jobs:
       - name: Render the authorized Coringa sample
         run: |
           set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
           python3 -m pip install --user --upgrade 'yt-dlp==2026.11.23'
           python3 -m yt_dlp --ignore-config --no-cache-dir --no-progress --socket-timeout 15 --retries 1 -f 'bv*[height<=720]+ba/b[height<=720]/b' --merge-output-format mp4 -o /tmp/coringa-source.mp4 'https://kick.com/coringa/clips/clip_01M7V8SCRC2ZP81Y679PV8X30N'
           ffmpeg -v error -nostdin -ss 17 -i /tmp/coringa-source.mp4 -t 35 -map 0:v:0 -map 0:a:0 \
