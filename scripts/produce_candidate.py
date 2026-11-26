@@ -90,13 +90,17 @@ def transcribe(source, duration, working):
     audio = working / "audio.wav"
     run("ffmpeg", "-v", "error", "-nostdin", "-i", source, "-t", duration,
         "-vn", "-ac", "1", "-ar", "16000", audio)
+    import wave
+    import numpy as np
+    with wave.open(str(audio), "rb") as wav:
+        samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
     whisper = WhisperModel("base", device="cpu", compute_type="int8", cpu_threads=2)
-    segments, info = whisper.transcribe(str(audio), beam_size=3, vad_filter=True)
+    segments, info = whisper.transcribe(samples, beam_size=3, vad_filter=True)
     segments = list(segments)
     if not segments or info.language_probability < 0.45:
         raise RuntimeError("Speech could not be reliably identified")
     if info.language not in {"en", "pt"}:
-        segments, _ = whisper.transcribe(str(audio), language=info.language, task="translate", beam_size=3, vad_filter=True)
+        segments, _ = whisper.transcribe(samples, language=info.language, task="translate", beam_size=3, vad_filter=True)
         segments = list(segments)
     rows = [{"start": max(0, float(s.start)), "end": min(duration, float(s.end)), "text": s.text.strip()}
             for s in segments if s.text.strip() and s.end > s.start and s.start < duration]
