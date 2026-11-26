@@ -76,6 +76,34 @@ class BrazilianTranslator:
         return [self.target.decode(result.hypotheses[0]) for result in results]
 
 
+def sentence_rows(segments, duration):
+    """Translate coherent utterances across ASR segment boundaries, not arbitrary fragments."""
+    rows, group = [], []
+    def flush():
+        if group:
+            text = "".join(word.word for word in group).strip()
+            rows.append({"start": max(0, group[0].start), "end": min(duration, group[-1].end), "text": text})
+            group.clear()
+    for segment in segments:
+        words = [w for w in (segment.words or []) if w.start is not None and w.end is not None and w.word.strip()]
+        if not words:
+            flush()
+            if segment.text.strip():
+                rows.append({"start": max(0, segment.start), "end": min(duration, segment.end), "text": segment.text.strip()})
+            continue
+        for word in words:
+            if group:
+                pause = word.start - group[-1].end
+                span = word.end - group[0].start
+                punctuation = re.search(r"[.!?;]$", group[-1].word.strip())
+                # Prefer pauses and punctuation; hard bounds prevent very long subtitles.
+                if pause > 0.85 or (punctuation and len(group) >= 4) or (span > 12 and len(group) >= 22):
+                    flush()
+            group.append(word)
+    flush()
+    return rows
+
+
 def transcribe(source, duration, working):
     from faster_whisper import WhisperModel
 
@@ -92,29 +120,9 @@ def transcribe(source, duration, working):
     if not segments or info.language_probability < 0.45:
         raise RuntimeError("Speech could not be reliably identified")
     if info.language not in {"en", "pt"}:
-        segments, _ = whisper.transcribe(samples, language=info.language, task="translate", beam_size=3, vad_filter=True)
+        segments, _ = whisper.transcribe(samples, language=info.language, task="translate", beam_size=5, vad_filter=True, word_timestamps=True)
         segments = list(segments)
-    rows = []
-    for segment in segments:
-        words = [w for w in (segment.words or []) if w.start is not None and w.end is not None and w.word.strip()]
-        blocks = []
-        if words:
-            group = []
-            for word in words:
-                if group and (word.end - group[0].start > 5 or len(group) >= 12 or word.start - group[-1].end > 0.65):
-                    blocks.append(group)
-                    group = []
-                group.append(word)
-                if len(group) >= 5 and re.search(r"[.!?;]$", word.word.strip()):
-                    blocks.append(group)
-                    group = []
-            if group:
-                blocks.append(group)
-            for group in blocks:
-                text = "".join(word.word for word in group).strip()
-                rows.append({"start": max(0, group[0].start), "end": min(duration, group[-1].end), "text": text})
-        elif segment.text.strip():
-            rows.append({"start": max(0, segment.start), "end": min(duration, segment.end), "text": segment.text.strip()})
+    rows = sentence_rows(segments, duration)
     rows = [row for row in rows if row["end"] > row["start"] and row["text"]]
     if not rows:
         raise RuntimeError("No usable speech segments")
@@ -168,9 +176,13 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
         # Split long sentences into short blocks of at most two lines.
         blocks = [fragments[i:i+2] for i in range(0, len(fragments), 2)]
         span = row["end"] - row["start"]
+        weights = [max(1, sum(len(line) for line in block)) for block in blocks]
+        total = sum(weights)
+        elapsed = 0
         for index, block in enumerate(blocks):
-            start = row["start"] + span * index / len(blocks)
-            end = row["start"] + span * (index + 1) / len(blocks)
+            start = row["start"] + span * elapsed / total
+            elapsed += weights[index]
+            end = row["start"] + span * elapsed / total
             if end > start:
                 events.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Subtitle,,0,0,0,," + r"\N".join(block))
     if len(events) < 2:
@@ -211,7 +223,7 @@ def produce(candidate, output):
     if (video["width"], video["height"]) != (1080, 1920) or not any(s["codec_type"] == "audio" for s in result["streams"]):
         raise RuntimeError("Invalid rendered media")
     manifest = {"candidate": candidate, "detected_language": language, "subtitle_language": "pt-BR",
-                "subtitle_segments": len(rows), "transcription_model": "faster-whisper-small", "duration": float(result["format"]["duration"]),
+                "subtitle_segments": len(rows), "transcription_model": "faster-whisper-small", "subtitle_method": "contextual-sentences-weighted-timing-v2", "duration": float(result["format"]["duration"]),
                 "caption": title + " | " + clean(candidate["channel"]) + " #GTAVI #GTA6 #GTAViralRadar",
                 "status": "rendered_validation", "public_post": False}
     (output / "transcricao.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
