@@ -1,11 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+import editorial from "../../../../config/editorial.json";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 45;
 
-const CORINGA_YOUTUBE_CHANNEL = "UCnYjd7cPNluC7Hi9AZrBNMw";
-const CORINGA_TWITCH_LOGINS = ["coringa", "loud_coringa"];
 const HUMOR_SIGNAL = /\bk{3,}\b|\b(?:engraçad[oa]s?|risadas?|rach[eo]i|hilári[oa]s?|zoeira)\b|[😂🤣]/iu;
 
 type Candidate = { id: string; title: string; url: string; channel: string; source: string; language: string; views: number; score: number; duration: number; start: number; publishedAt: string; evidence: string; creatorId?: string; channelSlug?: string; humorSignals?: number };
@@ -31,7 +30,7 @@ async function twitchCandidates(): Promise<Candidate[]> {
   const token = await requestJson("https://id.twitch.tv/oauth2/token", { method: "POST", body: new URLSearchParams({ client_id: client, client_secret: secret, grant_type: "client_credentials" }) });
   const headers = { "Client-Id": client, Authorization: "Bearer " + token.access_token };
   const logins = new URLSearchParams();
-  for (const login of CORINGA_TWITCH_LOGINS) logins.append("login", login);
+  for (const login of editorial.twitch) logins.append("login", login);
   const [game, users] = await Promise.all([
     requestJson("https://api.twitch.tv/helix/games?" + new URLSearchParams({ name: "Grand Theft Auto VI" }), { headers }),
     requestJson("https://api.twitch.tv/helix/users?" + logins, { headers }),
@@ -40,7 +39,7 @@ async function twitchCandidates(): Promise<Candidate[]> {
   if (!gameId) throw new Error("GTA VI game category unavailable");
   const end = new Date(), start = new Date(end.getTime() - 7 * 86400000);
   const broadcasters: string[] = (users.data || []).map((user: { id: string }) => user.id);
-  if (!broadcasters.length) throw new Error("Coringa Twitch channel unavailable");
+  if (!broadcasters.length) throw new Error("Approved Twitch channels unavailable");
   const responses = await Promise.all(broadcasters.map((broadcasterId: string) => requestJson(
     "https://api.twitch.tv/helix/clips?" + new URLSearchParams({ broadcaster_id: broadcasterId, first: "100", started_at: start.toISOString(), ended_at: end.toISOString() }), { headers }
   )));
@@ -78,17 +77,18 @@ async function youtubeCandidates(): Promise<Candidate[]> {
   // Find current, popular completed GTA VI broadcasts rather than relying only on static IDs.
   let discovered: string[] = [];
   try {
-    const search = await requestJson("https://www.googleapis.com/youtube/v3/search?" + new URLSearchParams({
-      part:"snippet", type:"video", eventType:"completed", channelId:CORINGA_YOUTUBE_CHANNEL, q:"GTA VI|GTA 6", order:"date",
-      publishedAfter:new Date(Date.now()-7*86400000).toISOString(), maxResults:"10", key
-    }));
-    discovered = (search.items || []).map((item: any) => item.id?.videoId).filter((id: any) => typeof id === "string" && /^[A-Za-z0-9_-]{11}$/.test(id));
+    const searches = await Promise.allSettled(editorial.youtube.map(channelId => requestJson("https://www.googleapis.com/youtube/v3/search?" + new URLSearchParams({
+      part:"snippet", type:"video", eventType:"completed", channelId, q:"GTA VI|GTA 6", order:"date",
+      publishedAfter:new Date(Date.now()-7*86400000).toISOString(), maxResults:"5", key
+    }))));
+    discovered = searches.flatMap(search => search.status === "fulfilled" ? search.value.items || [] : [])
+      .map((item: any) => item.id?.videoId).filter((id: any) => typeof id === "string" && /^[A-Za-z0-9_-]{11}$/.test(id));
   } catch { /* Fixed authorized archive IDs remain available when discovery is rate-limited. */ }
   const ids = [...new Set([...configured, ...discovered])].slice(0, 10);
   const videos = await requestJson("https://www.googleapis.com/youtube/v3/videos?" + new URLSearchParams({ part: "snippet,liveStreamingDetails,contentDetails", id: ids.join(","), key }));
   const candidates: Candidate[] = [];
   await Promise.allSettled((videos.items || []).map(async (video: any) => {
-    if (video.snippet?.channelId !== CORINGA_YOUTUBE_CHANNEL) return;
+    if (!editorial.youtube.includes(video.snippet?.channelId)) return;
     if (!video.liveStreamingDetails?.actualEndTime || !/gta\s*(vi|6)|grand theft auto\s*(vi|6)/i.test(video.snippet.title)) return;
     const end = Date.parse(video.liveStreamingDetails.actualEndTime), start = Date.parse(video.liveStreamingDetails.actualStartTime);
     const available = (end - start) / 1000;
@@ -125,6 +125,6 @@ async function youtubeCandidates(): Promise<Candidate[]> {
 export async function GET(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const results = await Promise.allSettled([twitchCandidates(), youtubeCandidates()]);
-  const candidates = results.flatMap(result => result.status === "fulfilled" ? result.value : []).filter(item => item.score >= 80).sort((a, b) => b.score - a.score).slice(0, 20);
-  return NextResponse.json({ candidates, editorialFocus: "coringa", providers: { twitch: results[0].status, youtube: results[1].status }, scoreType: "heuristic engagement evidence, not guaranteed future performance" });
+  const candidates = results.flatMap(result => result.status === "fulfilled" ? result.value : []).filter(item => item.score >= editorial.minScore).sort((a, b) => b.score - a.score).slice(0, 20);
+  return NextResponse.json({ candidates, editorialFocus: editorial.focus, minScore: editorial.minScore, providers: { twitch: results[0].status, youtube: results[1].status }, scoreType: "heuristic engagement evidence, not guaranteed future performance" });
 }
