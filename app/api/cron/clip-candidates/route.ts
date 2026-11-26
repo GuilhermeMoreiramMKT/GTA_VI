@@ -125,6 +125,6 @@ async function youtubeCandidates(): Promise<Candidate[]> {
 export async function GET(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const results = await Promise.allSettled([twitchCandidates(), youtubeCandidates()]);
-  const candidates = results.flatMap(result => result.status === "fulfilled" ? result.value : []).filter(item => item.score >= editorial.minScore).sort((a, b) => b.score - a.score).slice(0, 20);
-  return NextResponse.json({ candidates, editorialFocus: editorial.focus, minScore: editorial.minScore, providers: { twitch: results[0].status, youtube: results[1].status }, scoreType: "heuristic engagement evidence, not guaranteed future performance" });
+  const candidates = results.flatMap(result => result.status === "fulfilled" ? result.value : []).filter(item => item.score >= editorial.fallbackMinScore).sort((a, b) => b.score - a.score).slice(0, 20);
+  return NextResponse.json({ candidates, editorialFocus: editorial.focus, minScore: editorial.minScore, fallbackMinScore: editorial.fallbackMinScore, providers: { twitch: results[0].status, youtube: results[1].status }, scoreType: "heuristic engagement evidence, not guaranteed future performance" });
 }
