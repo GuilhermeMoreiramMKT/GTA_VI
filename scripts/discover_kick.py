@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Discover public Kick clips with real engagement and a completed archive match."""
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+import json
+import math
+import os
+from pathlib import Path
+import re
+import time
+from urllib.parse import urlparse
+
+GTA = re.compile(r"\b(?:gta|grand theft auto)\s*(?:vi|6)\b", re.I)
+DEFAULT = "coringa,xqc,westcol,adinross"
+
+class Quiet:
+    def debug(self, message): pass
+    def warning(self, message): pass
+    def error(self, message): pass
+
+def listing(slug, kind, limit):
+    import yt_dlp
+    url = f"https://kick.com/{slug}/{kind}" + ("?sort=view&range=week" if kind == "clips" else "")
+    opts = {"extract_flat": True, "playlistend": limit, "skip_download": True,
+            "quiet": True, "no_warnings": True, "logger": Quiet(),
+            "socket_timeout": 15, "retries": 0, "extractor_retries": 0,
+            "ignoreerrors": False, "cachedir": False}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        result = ydl.extract_info(url, download=False)
+        if not result or result.get("_type") != "playlist":
+            raise RuntimeError("Public playlist unavailable")
+        return [entry for entry in result.get("entries", []) if entry]
+
+def number(value):
+    return value if isinstance(value, (float, int)) and math.isfinite(value) else 0
+
+def game(entry):
+    return bool(GTA.search(" ".join([str(entry.get("title",""))]+[str(x) for x in entry.get("categories") or []])))
+
+def collect(slug):
+    now = time.time()
+    try:
+        clips = listing(slug,"clips",30)
+        archives = listing(slug,"videos",20)
+    except Exception as exc:
+        return [], {"channel":slug,"status":"unavailable","reason":type(exc).__name__}
+    valid_archives = [a for a in archives if a.get("is_live") is False and a.get("availability")=="public"
+                      and number(a.get("timestamp"))>0 and number(a.get("duration"))>=30
+                      and number(a.get("timestamp"))+number(a.get("duration"))<now and game(a)]
+    items = []
+    for index, clip in enumerate(sorted(clips,key=lambda x:-number(x.get("view_count")))):
+        ident = str(clip.get("id",""))
+        ts = number(clip.get("timestamp"))
+        duration = number(clip.get("duration"))
+        views = number(clip.get("view_count"))
+        if not re.fullmatch(r"clip_[\w-]+",ident) or not 30<=duration<=45 or views<=0 or not now-7*86400<=ts<=now:
+            continue
+        if clip.get("age_limit",0) == 18 or re.search(r"strip club|private dance|nude|nsfw",str(clip.get("title","")),re.I):
+            continue
+        # A timestamp match is evidence of a finished VOD, not a platform-provided clip/VOD ID link.
+        archive = next((a for a in valid_archives if number(a.get("timestamp"))<=ts<=number(a.get("timestamp"))+number(a.get("duration"))),None)
+        if not archive or not game(clip):
+            continue
+        score = round(min(50,10*math.log10(1+views))+20*(1-index/max(1,len(clips)))+15*max(0,1-(now-ts)/(7*86400))+15)
+        items.append({"id":"kick-clip-"+ident,"title":str(clip.get("title") or "Momento de GTA VI"),
+                      "url":f"https://kick.com/{slug}/clips/{ident}","channel":str(clip.get("channel") or slug),
+                      "channelSlug":slug,"source":"Kick","language":"unknown","views":int(views),"score":score,
+                      "duration":duration,"start":0,"publishedAt":datetime.fromtimestamp(ts,timezone.utc).isoformat(),
+                      "evidence":f"Kick public clip views, rank and recency; timestamp matched completed public GTA VI archive {archive.get('id','')}"})
+    return items,{"channel":slug,"status":"ok","clips":len(clips),"archives":len(archives),"completedGtaArchives":len(valid_archives),"matches":len(items),"qualified":sum(x["score"]>=80 for x in items)}
+
+def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--output",required=True)
+    parser.add_argument("--channels",default=os.environ.get("RADAR_KICK_CHANNELS",DEFAULT))
+    args=parser.parse_args()
+    slugs=list(dict.fromkeys(s.strip().lower() for s in args.channels.split(",") if re.fullmatch(r"[a-zA-Z0-9_-]{1,40}",s.strip())))[:8]
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        result=list(pool.map(collect,slugs))
+    candidates=sorted([item for items,_ in result for item in items if item["score"]>=80],key=lambda x:-x["score"])
+    reports=[report for _,report in result]
+    payload={"candidates":candidates,"channels":reports,"provider":"ok" if any(x["status"]=="ok" for x in reports) else "unavailable"}
+    Path(args.output).write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
+    print(json.dumps({"provider":payload["provider"],"channels":reports,"qualified":len(candidates)}))
+
+if __name__=="__main__":
+    main()
