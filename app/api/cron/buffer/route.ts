@@ -329,7 +329,7 @@ export async function POST(request: Request) {
     if (action === "readiness") {
       const state = await publicationReadiness(config);
       const jobs = await database<{id:string}[]>(config,"video_jobs?status=eq.rendered&score=gte." + editorial.fallbackMinScore + "&select=id&limit=4");
-      return NextResponse.json({ok:true,...state,readyJobs:jobs.length,instagram:true,tiktok:true});
+      return NextResponse.json({ok:true,...state,readyJobs:jobs.length,dailyTarget:editorial.dailyPublicationTarget,instagram:true,tiktok:true});
     }
     if (action === "schedule") {
       const state = await publicationReadiness(config);
