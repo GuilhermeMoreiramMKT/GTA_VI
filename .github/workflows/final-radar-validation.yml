@@ -1,0 +1,85 @@
+name: Final radar validation (no publication)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/final-radar-validation.yml'
+permissions:
+  contents: read
+concurrency:
+  group: radar-final-validation
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install media tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core python3-venv
+          python3 -m venv /tmp/radar-venv
+          /tmp/radar-venv/bin/python -m pip install --disable-pip-version-check 'yt-dlp==2026.11.23' 'faster-whisper==1.1.1' 'ctranslate2==4.6.0' 'sentencepiece==0.2.0' 'requests==2.32.5' 'huggingface-hub==0.29.3'
+      - name: Verify public discovery and streaming sources
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          case "$RADAR_BASE_URL" in https://gta-viral-radar.vercel.app|https://gta-viral-radar.vercel.app/) ;; *) exit 1;; esac
+          /tmp/radar-venv/bin/python scripts/discover_kick.py --output output/kick.json
+          curl -fsS --max-time 65 -H "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/clip-candidates" > output/candidates.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open("output/candidates.json"))
+          k=json.load(open("output/kick.json"))
+          print("Providers:", d["providers"], "Kick:", k["provider"])
+          assert d["providers"]["twitch"]=="fulfilled" and d["providers"]["youtube"]=="fulfilled"
+          d["candidates"]=[c for c in d["candidates"] if c.get("language","").startswith("en") and c["score"]>=80]
+          assert d["candidates"], "No real English candidate available"
+          json.dump(d,open("output/candidates.json","w"))
+          PY
+      - name: Verify contextual translation on a real scored clip
+        run: |
+          export PATH="/tmp/radar-venv/bin:$PATH"
+          python scripts/produce_candidate.py --candidates output/candidates.json --output output --language en
+          python - <<'PY'
+          import json
+          d=json.load(open("output/manifest.json"))
+          rows=json.load(open("output/transcricao.json"))
+          assert d["subtitle_method"]=="contextual-sentences-weighted-timing-v2"
+          assert d["subtitle_language"]=="pt-BR" and d["public_post"] is False
+          assert 30<=d["duration"]<=45.1 and d["candidate"]["score"]>=80
+          assert all(0<=r["start"]<r["end"]<=d["duration"]+0.1 and r["text"].strip() for r in rows)
+          print("Validated segments:", len(rows), "Duration:",d["duration"],"Score:",d["candidate"]["score"])
+          PY
+      - name: Confirm both social destinations and paused publication
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 60 -X POST -H "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/buffer?action=health" > output/social-health.json
+          python3 - <<'PY'
+          import json
+          h=json.load(open("output/social-health.json"))
+          assert h.get("ok") and h.get("instagram") and h.get("tiktok")
+          print("Both destinations connected; no posts requested.")
+          PY
+      - name: Save final validation evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: final-radar-validation
+          path: |
+            output/kick.json
+            output/candidates.json
+            output/clip.mp4
+            output/manifest.json
+            output/transcricao.json
+            output/legendagem-pt-br.ass
+            output/social-health.json
+          retention-days: 5
+          if-no-files-found: warn
