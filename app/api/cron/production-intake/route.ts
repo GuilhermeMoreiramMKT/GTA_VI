@@ -81,8 +81,9 @@ export async function POST(req: Request) {
       if (!/^\d+$/.test(String(body.run)) || body.editorialFocus !== "coringa" || JSON.stringify(body).length > 10000) {
         return NextResponse.json({error:"Invalid focus receipt"},{status:400});
       }
+      const comparison = body.comparison === true;
       await db("drafts?on_conflict=id",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},
-        body:JSON.stringify({id:"f7275a41-371d-4a52-82d6-d115edc45409",trend_id:"radar-editorial-focus",title:"Monitoramento de cortes do Coringa",script:JSON.stringify(body),caption:"Resumo da busca automática",source_url:"https://github.com/GuilhermeMoreiramMKT/GTA_VI/actions/runs/"+body.run})});
+        body:JSON.stringify({id:comparison?"619b1a5f-f97f-4b2d-a786-fd69dec07797":"f7275a41-371d-4a52-82d6-d115edc45409",trend_id:comparison?"radar-br-comparison":"radar-editorial-focus",title:comparison?"Comparativo de cortes brasileiros no Kick":"Monitoramento de cortes do Coringa",script:JSON.stringify(body),caption:"Resumo da busca automática",source_url:"https://github.com/GuilhermeMoreiramMKT/GTA_VI/actions/runs/"+body.run})});
       return NextResponse.json({ok:true});
     }
     if (action === "validation-receipt") {
