@@ -6,8 +6,9 @@ export const maxDuration = 45;
 
 const CORINGA_YOUTUBE_CHANNEL = "UCnYjd7cPNluC7Hi9AZrBNMw";
 const CORINGA_TWITCH_LOGINS = ["coringa", "loud_coringa"];
+const HUMOR_SIGNAL = /\bk{3,}\b|\b(?:engraçad[oa]s?|risadas?|rach[eo]i|hilári[oa]s?|zoeira)\b|[😂🤣]/iu;
 
-type Candidate = { id: string; title: string; url: string; channel: string; source: string; language: string; views: number; score: number; duration: number; start: number; publishedAt: string; evidence: string; creatorId?: string; channelSlug?: string };
+type Candidate = { id: string; title: string; url: string; channel: string; source: string; language: string; views: number; score: number; duration: number; start: number; publishedAt: string; evidence: string; creatorId?: string; channelSlug?: string; humorSignals?: number };
 
 function authorized(request: Request) {
   const key = process.env.CRON_SECRET;
@@ -38,7 +39,7 @@ async function twitchCandidates(): Promise<Candidate[]> {
   const gameId = game.data?.[0]?.id;
   if (!gameId) throw new Error("GTA VI game category unavailable");
   const end = new Date(), start = new Date(end.getTime() - 7 * 86400000);
-  const broadcasters = (users.data || []).map((user: { id: string }) => user.id);
+  const broadcasters: string[] = (users.data || []).map((user: { id: string }) => user.id);
   if (!broadcasters.length) throw new Error("Coringa Twitch channel unavailable");
   const responses = await Promise.all(broadcasters.map((broadcasterId: string) => requestJson(
     "https://api.twitch.tv/helix/clips?" + new URLSearchParams({ broadcaster_id: broadcasterId, first: "100", started_at: start.toISOString(), ended_at: end.toISOString() }), { headers }
@@ -66,7 +67,7 @@ async function twitchCandidates(): Promise<Candidate[]> {
     const rank = 20 * (1 - index / Math.max(1, eligible.length));
     const freshness = 15 * Math.max(0, 1 - age / 7);
     const score = Math.round(reach + rank + freshness + 15);
-    return [{ id: "twitch-clip-" + clip.id, title: clip.title, url: clip.url, channel: clip.broadcaster_name, creatorId: String(clip.broadcaster_id), channelSlug: String(archive.user_login || ""), source: "Twitch", language: clip.language || "unknown", views: clip.view_count, score, duration: clip.duration, start: 0, publishedAt: clip.created_at, evidence: "Official Twitch clip views, relative rank, recency and usable duration" }];
+    return [{ id: "twitch-clip-" + clip.id, title: clip.title, url: clip.url, channel: clip.broadcaster_name, creatorId: String(clip.broadcaster_id), channelSlug: String(archive.user_login || ""), source: "Twitch", language: clip.language || "unknown", humorSignals: Number(HUMOR_SIGNAL.test(clip.title || "")), views: clip.view_count, score, duration: clip.duration, start: 0, publishedAt: clip.created_at, evidence: "Official Twitch clip views, relative rank, recency and usable duration" }];
   });
 }
 
@@ -96,7 +97,7 @@ async function youtubeCandidates(): Promise<Candidate[]> {
     try {
       comments = await requestJson("https://www.googleapis.com/youtube/v3/commentThreads?" + new URLSearchParams({ part: "snippet", videoId: video.id, maxResults: "100", order: "relevance", textFormat: "plainText", key }));
     } catch { return; }
-    const buckets = new Map<number, { authors: Set<string>; likes: number }>();
+    const buckets = new Map<number, { authors: Set<string>; humorAuthors: Set<string>; likes: number }>();
     for (const item of comments.items || []) {
       const comment = item.snippet?.topLevelComment?.snippet;
       if (!comment?.authorChannelId?.value) continue;
@@ -104,17 +105,18 @@ async function youtubeCandidates(): Promise<Candidate[]> {
         const offset = Number(match[1] || 0) * 3600 + Number(match[2]) * 60 + Number(match[3]);
         if (offset < 0 || offset > available - 35) continue;
         const bucket = Math.floor(offset / 30) * 30;
-        const b = buckets.get(bucket) || { authors: new Set<string>(), likes: 0 };
+        const b = buckets.get(bucket) || { authors: new Set<string>(), humorAuthors: new Set<string>(), likes: 0 };
         if (!b.authors.has(comment.authorChannelId.value)) {
           b.authors.add(comment.authorChannelId.value); b.likes += Math.max(0, Number(comment.likeCount) || 0);
         }
+        if (HUMOR_SIGNAL.test(String(comment.textOriginal || ""))) b.humorAuthors.add(comment.authorChannelId.value);
         buckets.set(bucket, b);
       }
     }
     for (const [offset, b] of buckets) {
       if (b.authors.size < 3) continue;
       const score = Math.round(Math.min(50, 12 * Math.log2(1 + b.authors.size)) + Math.min(35, 8 * Math.log10(1 + b.likes)) + 15);
-      candidates.push({ id: "youtube-moment-" + video.id + "-" + offset, title: "Momento comentado da live de " + video.snippet.channelTitle, url: "https://www.youtube.com/watch?v=" + video.id, channel: video.snippet.channelTitle, creatorId: String(video.snippet.channelId || ""), source: "YouTube", language: video.snippet.defaultAudioLanguage || "unknown", views: 0, score, duration: 40, start: Math.max(0, offset - 5), publishedAt: video.liveStreamingDetails.actualEndTime, evidence: b.authors.size + " independent timestamp comments and " + b.likes + " likes" });
+      candidates.push({ id: "youtube-moment-" + video.id + "-" + offset, title: "Momento comentado da live de " + video.snippet.channelTitle, url: "https://www.youtube.com/watch?v=" + video.id, channel: video.snippet.channelTitle, creatorId: String(video.snippet.channelId || ""), source: "YouTube", language: video.snippet.defaultAudioLanguage || "unknown", humorSignals: b.humorAuthors.size, views: 0, score, duration: 40, start: Math.max(0, offset - 5), publishedAt: video.liveStreamingDetails.actualEndTime, evidence: b.authors.size + " independent timestamp comments and " + b.likes + " likes" });
     }
   }));
   return candidates;
