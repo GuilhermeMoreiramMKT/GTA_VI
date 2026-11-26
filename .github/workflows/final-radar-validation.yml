@@ -38,7 +38,7 @@ jobs:
           import json
           d=json.load(open("output/candidates.json"))
           k=json.load(open("output/kick.json"))
-          print("Providers:", d["providers"], "Kick:", k["provider"])
+          print("Providers:", d["providers"], "Kick:", k["provider"], "Qualified Kick clips:", len(k["candidates"]))
           assert d["providers"]["twitch"]=="fulfilled" and d["providers"]["youtube"]=="fulfilled"
           assert k["provider"]=="ok" and any(x.get("completedGtaArchives",0)>0 for x in k["channels"])
           d["candidates"]=[c for c in d["candidates"] if c.get("language","").startswith("en") and c["score"]>=80]
@@ -105,7 +105,7 @@ jobs:
           candidates=read("candidates.json") or {}
           manifest=read("manifest.json")
           rows=read("transcricao.json") or []
-          payload={"run":os.environ["GITHUB_RUN_ID"],"result":os.environ["VALIDATION_RESULT"],"kick":{k:kick.get(k) for k in ("provider","channels")},"providers":candidates.get("providers"),"candidateCount":len(candidates.get("candidates",[])),"manifest":manifest,"subtitleSample":rows[:8],"social":read("social-health.json")}
+          payload={"run":os.environ["GITHUB_RUN_ID"],"result":os.environ["VALIDATION_RESULT"],"kick":{k:kick.get(k) for k in ("provider","channels")},"providers":candidates.get("providers"),"candidateCount":len(candidates.get("candidates",[])),"kickCandidates":[{key:c.get(key) for key in ("id","channel","score","duration","views","source")} for c in kick.get("candidates",[])],"manifest":manifest,"subtitleSample":rows[:8],"social":read("social-health.json")}
           Path("/tmp/radar-final-receipt.json").write_text(json.dumps(payload))
           PY
           for attempt in {1..24}; do
