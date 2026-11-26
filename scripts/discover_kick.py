@@ -12,7 +12,8 @@ import time
 from urllib.parse import urlparse
 
 GTA = re.compile(r"\b(?:gta|grand theft auto)\s*(?:vi|6)\b", re.I)
-DEFAULT = "coringa"
+EDITORIAL = json.loads((Path(__file__).resolve().parents[1] / "config" / "editorial.json").read_text(encoding="utf-8"))
+DEFAULT = ",".join(EDITORIAL["kick"])
 HUMOR_SIGNAL = re.compile(r"\bk{3,}\b|\b(?:engraçad[oa]s?|risadas?|rach[eo]i|hilári[oa]s?|zoeira)\b|[😂🤣]", re.I)
 
 class Quiet:
@@ -84,7 +85,7 @@ def collect(slug):
     for rank, item in enumerate(items):
         age = now - datetime.fromisoformat(item["publishedAt"]).timestamp()
         item["score"] = round(min(50,10*math.log10(1+item["views"])) + 20*(1-rank/max(1,len(items))) + 15*max(0,1-age/(7*86400)) + 15)
-    return items,{"channel":slug,"status":"ok","clips":len(clips),"archives":len(archives),"completedGtaArchives":len(valid_archives),"matches":len(items),"qualified":sum(x["score"]>=80 for x in items),"rejected":rejected,"highestScore":max((x["score"] for x in items),default=0)}
+    return items,{"channel":slug,"status":"ok","clips":len(clips),"archives":len(archives),"completedGtaArchives":len(valid_archives),"matches":len(items),"qualified":sum(x["score"]>=EDITORIAL["minScore"] for x in items),"rejected":rejected,"highestScore":max((x["score"] for x in items),default=0)}
 
 def main():
     parser=argparse.ArgumentParser()
@@ -94,7 +95,7 @@ def main():
     slugs=list(dict.fromkeys(s.strip().lower() for s in args.channels.split(",") if re.fullmatch(r"[a-zA-Z0-9_-]{1,40}",s.strip())))[:8]
     with ThreadPoolExecutor(max_workers=3) as pool:
         result=list(pool.map(collect,slugs))
-    candidates=sorted([item for items,_ in result for item in items if item["score"]>=80],key=lambda x:-x["score"])
+    candidates=sorted([item for items,_ in result for item in items if item["score"]>=EDITORIAL["minScore"]],key=lambda x:-x["score"])
     reports=[report for _,report in result]
     payload={"candidates":candidates,"channels":reports,"provider":"ok" if any(x["status"]=="ok" for x in reports) else "unavailable"}
     Path(args.output).write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
