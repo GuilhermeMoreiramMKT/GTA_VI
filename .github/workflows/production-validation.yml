@@ -44,7 +44,7 @@ jobs:
           case "$RADAR_BASE_URL" in https://gta-viral-radar.vercel.app|https://gta-viral-radar.vercel.app/) ;; *) exit 1;; esac
           for attempt in {1..24}; do
             code=$(curl -sS --max-time 60 -o output/candidates.json -w '%{http_code}' --header "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/clip-candidates" || true)
-            if [ "$code" = 200 ] && python3 -c 'import json; cfg=json.load(open("config/editorial.json")); data=json.load(open("output/candidates.json")); assert data.get("editorialFocus")==cfg["focus"] and data.get("minScore")==cfg["minScore"]' 2>/dev/null; then break; fi
+            if [ "$code" = 200 ] && python3 -c 'import json; cfg=json.load(open("config/editorial.json")); data=json.load(open("output/candidates.json")); assert data.get("editorialFocus")==cfg["focus"] and data.get("minScore")==cfg["minScore"] and data.get("fallbackMinScore")==cfg["fallbackMinScore"]' 2>/dev/null; then break; fi
             if [ "$code" = 401 ]; then exit 1; fi
             sleep 10
           done
@@ -62,13 +62,13 @@ jobs:
           data = json.load(open("output/candidates.json"))
           state = json.load(open("output/queue.json"))
           kick = json.load(open("output/kick.json"))
-          assert data.get("editorialFocus") == EDITORIAL["focus"] and data.get("minScore") == EDITORIAL["minScore"]
+          assert data.get("editorialFocus") == EDITORIAL["focus"] and data.get("minScore") == EDITORIAL["minScore"] and data.get("fallbackMinScore") == EDITORIAL["fallbackMinScore"]
           assert {channel["channel"] for channel in kick["channels"]} == set(EDITORIAL["kick"])
           data["providers"]["kick"] = kick["provider"]
           merged = {c["id"]: c for c in data["candidates"] + kick["candidates"]}
           assert all(declared_creator(c) for c in merged.values()), "Unexpected creator in focused discovery"
           candidates = [c for c in merged.values() if c["id"] not in state["excluded"]]
-          receipt = {"editorialFocus":EDITORIAL["focus"],"minScore":EDITORIAL["minScore"],"run":os.environ["GITHUB_RUN_ID"],"providers":data["providers"],"kick":kick["channels"],"qualified":len(merged),"new":len(candidates),"remaining":state["remaining"]}
+          receipt = {"editorialFocus":EDITORIAL["focus"],"minScore":EDITORIAL["minScore"],"run":os.environ["GITHUB_RUN_ID"],"providers":data["providers"],"kick":kick["channels"],"qualified":sum(c["score"]>=EDITORIAL["minScore"] for c in merged.values()),"fallback":sum(c["score"]<EDITORIAL["minScore"] for c in candidates),"new":len(candidates),"remaining":state["remaining"]}
           with open("output/focus.json","w") as file:
               json.dump(receipt,file)
           data["candidates"] = candidates if state["remaining"] > 0 else []
