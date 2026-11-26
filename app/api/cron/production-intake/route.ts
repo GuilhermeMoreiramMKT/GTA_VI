@@ -98,7 +98,7 @@ export async function POST(req: Request) {
     }
     if (action === "reserve") {
       const m = body.manifest, c = m?.candidate;
-      if (!c || !Number.isInteger(c.score) || c.score < editorial.minScore || c.score > 100 || !Number.isFinite(m.duration) || m.duration < 30 || m.duration > 45.1 || !Number.isInteger(m.subtitle_segments) || m.subtitle_segments < 1 || m.subtitle_language !== "pt-BR" || m.public_post !== false || typeof m.caption !== "string" || !m.caption.trim() || !/^\d+$/.test(body.run)) return NextResponse.json({error:"Invalid manifest"},{status:400});
+      if (!c || !Number.isInteger(c.score) || c.score < editorial.fallbackMinScore || c.score > 100 || !Number.isFinite(m.duration) || m.duration < 30 || m.duration > 45.1 || !Number.isInteger(m.subtitle_segments) || m.subtitle_segments < 1 || m.subtitle_language !== "pt-BR" || m.public_post !== false || typeof m.caption !== "string" || !m.caption.trim() || !/^\d+$/.test(body.run)) return NextResponse.json({error:"Invalid manifest"},{status:400});
       const source = new URL(c.url);
       if (source.protocol !== "https:" || source.username || source.password || !["twitch.tv","www.twitch.tv","clips.twitch.tv","youtube.com","www.youtube.com","youtu.be","kick.com","www.kick.com"].includes(source.hostname)) return NextResponse.json({error:"Invalid source"},{status:400});
       // Match the creator identified in the user's publication-rights declaration.
