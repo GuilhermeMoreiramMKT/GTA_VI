@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 export const maxDuration = 45;
 
-type Candidate = { id: string; title: string; url: string; channel: string; source: string; language: string; views: number; score: number; duration: number; start: number; publishedAt: string; evidence: string };
+type Candidate = { id: string; title: string; url: string; channel: string; source: string; language: string; views: number; score: number; duration: number; start: number; publishedAt: string; evidence: string; creatorId?: string; channelSlug?: string };
 
 function authorized(request: Request) {
   const key = process.env.CRON_SECRET;
@@ -53,7 +53,7 @@ async function twitchCandidates(): Promise<Candidate[]> {
     const rank = 20 * (1 - index / Math.max(1, eligible.length));
     const freshness = 15 * Math.max(0, 1 - age / 7);
     const score = Math.round(reach + rank + freshness + 15);
-    return [{ id: "twitch-clip-" + clip.id, title: clip.title, url: clip.url, channel: clip.broadcaster_name, source: "Twitch", language: clip.language || "unknown", views: clip.view_count, score, duration: clip.duration, start: 0, publishedAt: clip.created_at, evidence: "Official Twitch clip views, relative rank, recency and usable duration" }];
+    return [{ id: "twitch-clip-" + clip.id, title: clip.title, url: clip.url, channel: clip.broadcaster_name, creatorId: String(clip.broadcaster_id), channelSlug: String(archive.user_login || ""), source: "Twitch", language: clip.language || "unknown", views: clip.view_count, score, duration: clip.duration, start: 0, publishedAt: clip.created_at, evidence: "Official Twitch clip views, relative rank, recency and usable duration" }];
   });
 }
 
@@ -100,7 +100,7 @@ async function youtubeCandidates(): Promise<Candidate[]> {
     for (const [offset, b] of buckets) {
       if (b.authors.size < 3) continue;
       const score = Math.round(Math.min(50, 12 * Math.log2(1 + b.authors.size)) + Math.min(35, 8 * Math.log10(1 + b.likes)) + 15);
-      candidates.push({ id: "youtube-moment-" + video.id + "-" + offset, title: "Momento comentado da live de " + video.snippet.channelTitle, url: "https://www.youtube.com/watch?v=" + video.id, channel: video.snippet.channelTitle, source: "YouTube", language: video.snippet.defaultAudioLanguage || "unknown", views: 0, score, duration: 40, start: Math.max(0, offset - 5), publishedAt: video.liveStreamingDetails.actualEndTime, evidence: b.authors.size + " independent timestamp comments and " + b.likes + " likes" });
+      candidates.push({ id: "youtube-moment-" + video.id + "-" + offset, title: "Momento comentado da live de " + video.snippet.channelTitle, url: "https://www.youtube.com/watch?v=" + video.id, channel: video.snippet.channelTitle, creatorId: String(video.snippet.channelId || ""), source: "YouTube", language: video.snippet.defaultAudioLanguage || "unknown", views: 0, score, duration: 40, start: Math.max(0, offset - 5), publishedAt: video.liveStreamingDetails.actualEndTime, evidence: b.authors.size + " independent timestamp comments and " + b.likes + " likes" });
     }
   }));
   return candidates;
