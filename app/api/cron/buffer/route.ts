@@ -94,7 +94,7 @@ function today() {
 }
 
 async function scheduleOne(config: Config, channels: Record<Platform, string>) {
-  const jobs = await database<Job[]>(config, "video_jobs?status=eq.rendered&score=gte.80&target_day=eq." + today() + "&order=score.desc,created_at.asc&limit=4");
+  const jobs = await database<Job[]>(config, "video_jobs?status=eq.rendered&score=gte.80&target_day=lte." + today() + "&order=score.desc,created_at.asc&limit=4");
   for (const job of jobs) {
     const assets = await database<Asset[]>(config, "radar_assets?trend_id=eq." + encodeURIComponent(job.trend_id) + "&limit=1");
     const asset = assets[0];
@@ -103,8 +103,8 @@ async function scheduleOne(config: Config, channels: Record<Platform, string>) {
       await patchJob(config, job.id, { status: "blocked", error: "Media, rights, caption or score verification required" });
       continue;
     }
-    const claimed = await database<Job[]>(config, jobPath(job.id) + "&status=eq.rendered", {
-      method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ status: "scheduling", error: null }),
+    const claimed = await database<Job[]>(config, "rpc/claim_radar_delivery", {
+      method: "POST", body: JSON.stringify({ p_id: job.id }),
     });
     if (!claimed.length) continue;
     try {
@@ -206,14 +206,36 @@ async function verifyRenderedDraft(config: Config, channels: Record<Platform, st
   }
 }
 
+async function publicationReadiness(config: Config) {
+  const [validation] = await database<{script:string}[]>(config,"drafts?id=eq.f9292482-f4c5-40ba-a854-55e324707aa8&select=script");
+  const receipts = await database<{id:string,script:string}[]>(config,"drafts?id=in.(8d31631d-672f-4e98-bca9-8eedaf706983,df9a4cdb-b26e-4564-89fa-68efd564edc3)&select=id,script");
+  let verified = false;
+  try {
+    const r = JSON.parse(validation?.script || "{}");
+    verified = r.result === "success" && r.providers?.twitch === "fulfilled" && r.providers?.youtube === "fulfilled" &&
+      r.kick?.provider === "ok" && r.social?.instagram === true && r.social?.tiktok === true &&
+      r.manifest?.subtitle_method === "contextual-sentences-idiom-aware-v3" && r.manifest?.candidate?.score >= 80 &&
+      r.manifest?.public_post === false && receipts.length === 2 &&
+      receipts.every(row => {const test=JSON.parse(row.script);return !!test.instagram && !!test.tiktok;});
+  } catch { verified = false; }
+  const explicitlyPaused = process.env.RADAR_AUTO_PUBLISH === "false";
+  return {verified,autoEnabled:verified && !explicitlyPaused,explicitlyPaused};
+}
+
 export async function POST(request: Request) {
   if (!authenticated(request)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   try {
     const config = configuration();
     const channels = await destinations(config);
     const action = new URL(request.url).searchParams.get("action");
+    if (action === "readiness") {
+      const state = await publicationReadiness(config);
+      const jobs = await database<{id:string}[]>(config,"video_jobs?status=eq.rendered&score=gte.80&select=id&limit=4");
+      return NextResponse.json({ok:true,...state,readyJobs:jobs.length,instagram:true,tiktok:true});
+    }
     if (action === "schedule") {
-      if (process.env.RADAR_AUTO_PUBLISH !== "true") return NextResponse.json({ ok: true, scheduled: 0, paused: true, reason: "Production validation pending" });
+      const state = await publicationReadiness(config);
+      if (!state.autoEnabled) return NextResponse.json({ok:true,scheduled:0,paused:true,reason:state.explicitlyPaused?"Explicitly paused":"Production validation pending"});
       return NextResponse.json({ ok: true, ...await scheduleOne(config, channels) });
     }
     if (action === "verify-rendered") return await verifyRenderedDraft(config, channels);
