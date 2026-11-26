@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+import editorial from "../../../../config/editorial.json";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
@@ -61,7 +62,7 @@ export async function POST(req: Request) {
       const {job,asset}=await jobAndAsset(body.id);
       if (job.status !== "review" || job.delivery_day || job.instagram_id || job.tiktok_id) return NextResponse.json({id:job.id,status:job.status,existing:true});
       const manifest=JSON.parse(job.script || "{}");
-      if (job.score<80 || manifest.subtitle_language!=="pt-BR" || manifest.duration<30 || manifest.duration>45.1 || manifest.subtitle_segments<1) throw new Error("Technical validation missing");
+      if (job.score<editorial.minScore || manifest.subtitle_language!=="pt-BR" || manifest.duration<30 || manifest.duration>45.1 || manifest.subtitle_segments<1) throw new Error("Technical validation missing");
       const object="production/"+job.id+".mp4";
       const download=await fetch(url+"/storage/v1/object/authenticated/radar-validation/"+object,{headers,cache:"no-store",signal:AbortSignal.timeout(15000)});
       if (!download.ok) throw new Error("Private render unavailable");
@@ -78,12 +79,12 @@ export async function POST(req: Request) {
       return NextResponse.json({id:job.id,status:"rendered",bytes:bytes.length});
     }
     if (action === "focus-receipt") {
-      if (!/^\d+$/.test(String(body.run)) || body.editorialFocus !== "coringa" || JSON.stringify(body).length > 10000) {
+      if (!/^\d+$/.test(String(body.run)) || body.editorialFocus !== editorial.focus || JSON.stringify(body).length > 10000) {
         return NextResponse.json({error:"Invalid focus receipt"},{status:400});
       }
       const comparison = body.comparison === true;
       await db("drafts?on_conflict=id",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},
-        body:JSON.stringify({id:comparison?"619b1a5f-f97f-4b2d-a786-fd69dec07797":"f7275a41-371d-4a52-82d6-d115edc45409",trend_id:comparison?"radar-br-comparison":"radar-editorial-focus",title:comparison?"Comparativo de cortes brasileiros no Kick":"Monitoramento de cortes do Coringa",script:JSON.stringify(body),caption:"Resumo da busca automática",source_url:"https://github.com/GuilhermeMoreiramMKT/GTA_VI/actions/runs/"+body.run})});
+        body:JSON.stringify({id:comparison?"619b1a5f-f97f-4b2d-a786-fd69dec07797":"f7275a41-371d-4a52-82d6-d115edc45409",trend_id:comparison?"radar-br-comparison":"radar-editorial-focus",title:comparison?"Comparativo de cortes brasileiros no Kick":"Monitoramento de cortes dos canais brasileiros aprovados",script:JSON.stringify(body),caption:"Resumo da busca automática",source_url:"https://github.com/GuilhermeMoreiramMKT/GTA_VI/actions/runs/"+body.run})});
       return NextResponse.json({ok:true});
     }
     if (action === "validation-receipt") {
@@ -97,7 +98,7 @@ export async function POST(req: Request) {
     }
     if (action === "reserve") {
       const m = body.manifest, c = m?.candidate;
-      if (!c || !Number.isInteger(c.score) || c.score < 80 || c.score > 100 || !Number.isFinite(m.duration) || m.duration < 30 || m.duration > 45.1 || !Number.isInteger(m.subtitle_segments) || m.subtitle_segments < 1 || m.subtitle_language !== "pt-BR" || m.public_post !== false || typeof m.caption !== "string" || !m.caption.trim() || !/^\d+$/.test(body.run)) return NextResponse.json({error:"Invalid manifest"},{status:400});
+      if (!c || !Number.isInteger(c.score) || c.score < editorial.minScore || c.score > 100 || !Number.isFinite(m.duration) || m.duration < 30 || m.duration > 45.1 || !Number.isInteger(m.subtitle_segments) || m.subtitle_segments < 1 || m.subtitle_language !== "pt-BR" || m.public_post !== false || typeof m.caption !== "string" || !m.caption.trim() || !/^\d+$/.test(body.run)) return NextResponse.json({error:"Invalid manifest"},{status:400});
       const source = new URL(c.url);
       if (source.protocol !== "https:" || source.username || source.password || !["twitch.tv","www.twitch.tv","clips.twitch.tv","youtube.com","www.youtube.com","youtu.be","kick.com","www.kick.com"].includes(source.hostname)) return NextResponse.json({error:"Invalid source"},{status:400});
       // Match the creator identified in the user's publication-rights declaration.
@@ -105,12 +106,12 @@ export async function POST(req: Request) {
       const slug = String(c.channelSlug || "").toLowerCase();
       const firstPath = source.pathname.split("/").filter(Boolean)[0]?.toLowerCase();
       const authorized =
-        (c.source === "Kick" && ["kick.com","www.kick.com"].includes(source.hostname) && slug === "coringa" && firstPath === "coringa") ||
-        (c.source === "Twitch" && ["twitch.tv","www.twitch.tv","clips.twitch.tv"].includes(source.hostname) && ["coringa","loud_coringa"].includes(slug)) ||
+        (c.source === "Kick" && ["kick.com","www.kick.com"].includes(source.hostname) && editorial.kick.includes(slug) && firstPath === slug) ||
+        (c.source === "Twitch" && ["twitch.tv","www.twitch.tv","clips.twitch.tv"].includes(source.hostname) && editorial.twitch.includes(slug)) ||
         (c.source === "YouTube" && ["youtube.com","www.youtube.com","youtu.be"].includes(source.hostname) &&
-          (c.creatorId === "UCnYjd7cPNluC7Hi9AZrBNMw" || ["mQ4CfLekrFI","QhKWnCPIhiU"].includes(source.searchParams.get("v") || "")));
+          editorial.youtube.includes(c.creatorId));
 
-      if (!authorized) return NextResponse.json({error:"New production is focused on Coringa"},{status:400});
+      if (!authorized) return NextResponse.json({error:"Creator is outside the approved editorial channels"},{status:400});
       const claim = await db("rpc/reserve_rendered_candidate",{method:"POST",body:JSON.stringify({p_manifest:m,p_run:String(body.run),p_authorized:authorized})});
       if (claim.limit || claim.status !== "rendering") return NextResponse.json(claim);
       const {job,asset} = await jobAndAsset(claim.id);
