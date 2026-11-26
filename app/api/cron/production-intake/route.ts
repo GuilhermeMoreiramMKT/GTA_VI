@@ -54,7 +54,16 @@ export async function POST(req: Request) {
       if (!c || !Number.isInteger(c.score) || c.score < 80 || c.score > 100 || !Number.isFinite(m.duration) || m.duration < 30 || m.duration > 45.1 || !Number.isInteger(m.subtitle_segments) || m.subtitle_segments < 1 || m.subtitle_language !== "pt-BR" || m.public_post !== false || typeof m.caption !== "string" || !m.caption.trim() || !/^\d+$/.test(body.run)) return NextResponse.json({error:"Invalid manifest"},{status:400});
       const source = new URL(c.url);
       if (source.protocol !== "https:" || source.username || source.password || !["twitch.tv","www.twitch.tv","clips.twitch.tv","youtube.com","www.youtube.com","youtu.be","kick.com","www.kick.com"].includes(source.hostname)) return NextResponse.json({error:"Invalid source"},{status:400});
-      const authorized = /^coringa$/i.test(c.channel.trim()) || (c.channel.trim().toLowerCase()==="loud coringa" && c.source==="YouTube");
+      // Match the creator identified in the user's publication-rights declaration.
+      // Display names alone are not evidence of identity.
+      const slug = String(c.channelSlug || "").toLowerCase();
+      const firstPath = source.pathname.split("/").filter(Boolean)[0]?.toLowerCase();
+      const authorized =
+        (c.source === "Kick" && ["kick.com","www.kick.com"].includes(source.hostname) && slug === "coringa" && firstPath === "coringa") ||
+        (c.source === "Twitch" && ["twitch.tv","www.twitch.tv","clips.twitch.tv"].includes(source.hostname) && ["coringa","loud_coringa"].includes(slug)) ||
+        (c.source === "YouTube" && ["youtube.com","www.youtube.com","youtu.be"].includes(source.hostname) &&
+          (c.creatorId === "UCnYjd7cPNluC7Hi9AZrBNMw" || ["mQ4CfLekrFI","QhKWnCPIhiU"].includes(source.searchParams.get("v") || "")));
+
       const claim = await db("rpc/reserve_rendered_candidate",{method:"POST",body:JSON.stringify({p_manifest:m,p_run:String(body.run),p_authorized:authorized})});
       if (claim.limit || claim.status !== "rendering") return NextResponse.json(claim);
       const {job,asset} = await jobAndAsset(claim.id);
