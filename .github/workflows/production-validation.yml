@@ -1,0 +1,68 @@
+name: GTA Viral Radar - automated production validation
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/production-validation.yml'
+      - 'scripts/produce_candidate.py'
+permissions:
+  contents: read
+concurrency:
+  group: radar-production-validation
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Discover completed-stream candidates
+        env:
+          RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          case "$RADAR_BASE_URL" in https://gta-viral-radar.vercel.app|https://gta-viral-radar.vercel.app/) ;; *) exit 1;; esac
+          for attempt in {1..24}; do
+            code=$(curl -sS --max-time 60 -o output/candidates.json -w '%{http_code}' --header "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/clip-candidates" || true)
+            if [ "$code" = 200 ]; then break; fi
+            if [ "$code" = 401 ]; then exit 1; fi
+            sleep 10
+          done
+          test "$code" = 200
+          python3 - <<'PY'
+          import json
+          data = json.load(open("output/candidates.json"))
+          candidates = data["candidates"]
+          print("Providers:", data["providers"])
+          print("Eligible candidates:", len(candidates))
+          print("Languages:", sorted({c["language"] for c in candidates}))
+          if not any(c["language"].lower().startswith("en") for c in candidates):
+              raise SystemExit("No scored English candidate available for translation validation")
+          PY
+      - name: Install media and open source language tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core python3-venv
+          python3 -m venv /tmp/radar-venv
+          /tmp/radar-venv/bin/python -m pip install --disable-pip-version-check \
+            'yt-dlp==2026.11.23' 'faster-whisper==1.1.1' 'ctranslate2==4.6.0' 'sentencepiece==0.2.0'
+      - name: Select, transcribe, translate and render
+        run: |
+          export PATH="/tmp/radar-venv/bin:$PATH"
+          python scripts/produce_candidate.py --candidates output/candidates.json --output output --language en
+      - name: Save validation output
+        uses: actions/upload-artifact@v4
+        with:
+          name: radar-automated-clip-pt-br
+          path: |
+            output/clip.mp4
+            output/legendagem-pt-br.ass
+            output/manifest.json
+            output/candidates.json
+          retention-days: 5
+          if-no-files-found: error
