@@ -40,6 +40,7 @@ jobs:
           k=json.load(open("output/kick.json"))
           print("Providers:", d["providers"], "Kick:", k["provider"])
           assert d["providers"]["twitch"]=="fulfilled" and d["providers"]["youtube"]=="fulfilled"
+          assert k["provider"]=="ok" and any(x.get("completedGtaArchives",0)>0 for x in k["channels"])
           d["candidates"]=[c for c in d["candidates"] if c.get("language","").startswith("en") and c["score"]>=80]
           assert d["candidates"], "No real English candidate available"
           json.dump(d,open("output/candidates.json","w"))
@@ -52,10 +53,15 @@ jobs:
           import json
           d=json.load(open("output/manifest.json"))
           rows=json.load(open("output/transcricao.json"))
-          assert d["subtitle_method"]=="contextual-sentences-weighted-timing-v2"
+          assert d["subtitle_method"]=="contextual-sentences-idiom-aware-v3"
           assert d["subtitle_language"]=="pt-BR" and d["public_post"] is False
           assert 30<=d["duration"]<=45.1 and d["candidate"]["score"]>=80
           assert all(0<=r["start"]<r["end"]<=d["duration"]+0.1 and r["text"].strip() for r in rows)
+          for row in rows:
+              original = row.get("original","").lower()
+              translated = row["text"].lower()
+              if "ingest everything about" in original: assert "comer tudo" not in translated
+              if "where they work out" in original: assert "trabalham fora" not in translated
           print("Validated segments:", len(rows), "Duration:",d["duration"],"Score:",d["candidate"]["score"])
           PY
       - name: Confirm both social destinations and paused publication
