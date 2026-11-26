@@ -86,8 +86,8 @@ def transcribe(source, duration, working):
     import numpy as np
     with wave.open(str(audio), "rb") as wav:
         samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
-    whisper = WhisperModel("base", device="cpu", compute_type="int8", cpu_threads=2)
-    segments, info = whisper.transcribe(samples, beam_size=3, vad_filter=True)
+    whisper = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=2)
+    segments, info = whisper.transcribe(samples, beam_size=5, vad_filter=True)
     segments = list(segments)
     if not segments or info.language_probability < 0.45:
         raise RuntimeError("Speech could not be reliably identified")
@@ -98,6 +98,8 @@ def transcribe(source, duration, working):
             for s in segments if s.text.strip() and s.end > s.start and s.start < duration]
     if not rows:
         raise RuntimeError("No usable speech segments")
+    for row in rows:
+        row["original"] = row["text"]
     translator = BrazilianTranslator(working / "translation") if info.language != "pt" else None
     if translator:
         translations = translator.translate([row["text"] for row in rows])
@@ -156,15 +158,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
     path.write_text(style + "\n".join(events) + "\n", encoding="utf-8")
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--candidates", required=True)
-    parser.add_argument("--output", default="output")
-    parser.add_argument("--language", default="")
-    args = parser.parse_args()
-    payload = json.loads(Path(args.candidates).read_text(encoding="utf-8"))
-    candidate = choose(payload["candidates"], args.language)
-    output = Path(args.output).resolve()
+def produce(candidate, output):
     output.mkdir(parents=True, exist_ok=True)
     working = output / "working"
     working.mkdir(exist_ok=True)
@@ -187,7 +181,7 @@ def main():
         os.chdir(output)
         run("ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-n", "-i", source, "-t", length,
             "-map", "0:v:0", "-map", "0:a:0",
-            "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30,ass=legendagem-pt-br.ass",
+            "-vf", "scale=1080:608:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30,ass=legendagem-pt-br.ass",
             "-c:v", "libx264", "-preset", "fast", "-crf", "21", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", final)
     finally:
@@ -197,12 +191,39 @@ def main():
     if (video["width"], video["height"]) != (1080, 1920) or not any(s["codec_type"] == "audio" for s in result["streams"]):
         raise RuntimeError("Invalid rendered media")
     manifest = {"candidate": candidate, "detected_language": language, "subtitle_language": "pt-BR",
-                "subtitle_segments": len(rows), "duration": float(result["format"]["duration"]),
+                "subtitle_segments": len(rows), "transcription_model": "faster-whisper-small", "duration": float(result["format"]["duration"]),
                 "caption": title + " | " + clean(candidate["channel"]) + " #GTAVI #GTA6 #GTAViralRadar",
                 "status": "rendered_validation", "public_post": False}
+    (output / "transcricao.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     (output / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"score": candidate["score"], "language": language, "subtitle_segments": len(rows),
                       "duration": manifest["duration"], "status": manifest["status"]}))
+
+
+def main():
+    import shutil
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--candidates", required=True)
+    parser.add_argument("--output", default="output")
+    parser.add_argument("--language", default="")
+    args = parser.parse_args()
+    payload = json.loads(Path(args.candidates).read_text(encoding="utf-8"))
+    pool = list(payload["candidates"])
+    output = Path(args.output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    for attempt in range(min(4, len(pool))):
+        candidate = choose(pool, args.language)
+        pool = [item for item in pool if item["id"] != candidate["id"]]
+        staging = output / ("attempt-" + str(attempt))
+        try:
+            produce(candidate, staging)
+        except (RuntimeError, ValueError, OSError, subprocess.CalledProcessError) as error:
+            print("Candidate processing failed:", type(error).__name__, flush=True)
+            continue
+        for name in ("clip.mp4", "legendagem-pt-br.ass", "manifest.json", "transcricao.json"):
+            shutil.copyfile(staging / name, output / name)
+        return
+    raise RuntimeError("No candidate could be rendered and verified")
 
 
 if __name__ == "__main__":
