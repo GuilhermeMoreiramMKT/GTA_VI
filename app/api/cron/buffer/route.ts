@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+import editorial from "../../../../config/editorial.json";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -99,7 +100,7 @@ function today() {
 }
 
 async function scheduleOne(config: Config, channels: Record<Platform, string>) {
-  const jobs = await database<Job[]>(config, "video_jobs?status=eq.rendered&score=gte.80&target_day=lte." + today() + "&order=score.desc,created_at.asc&limit=4");
+  const jobs = await database<Job[]>(config, "video_jobs?status=eq.rendered&score=gte." + editorial.minScore + "&target_day=lte." + today() + "&order=score.desc,created_at.asc&limit=4");
   for (const job of jobs) {
     const assets = await database<Asset[]>(config, "radar_assets?trend_id=eq." + encodeURIComponent(job.trend_id) + "&limit=1");
     const asset = assets[0];
@@ -182,7 +183,7 @@ async function verifyRenderedDraft(config: Config, channels: Record<Platform, st
     const receipt = JSON.parse(existing[0].script);
     return NextResponse.json({ok:!!receipt.instagram && !!receipt.tiktok,instagram:!!receipt.instagram,tiktok:!!receipt.tiktok,existing:true,draft:true});
   }
-  const [job] = await database<Job[]>(config, jobPath(receiptId) + "&status=eq.review&score=gte.80");
+  const [job] = await database<Job[]>(config, jobPath(receiptId) + "&status=eq.review&score=gte." + editorial.minScore);
   if (!job?.caption) return NextResponse.json({error:"Validated test asset unavailable"},{status:404});
   const object = "production/" + job.id + ".mp4";
   const response = await fetch(config.url+"/storage/v1/object/sign/radar-validation/"+object,{
@@ -219,7 +220,7 @@ async function publicationReadiness(config: Config) {
     const r = JSON.parse(validation?.script || "{}");
     verified = r.result === "success" && r.providers?.twitch === "fulfilled" && r.providers?.youtube === "fulfilled" &&
       r.kick?.provider === "ok" && r.social?.instagram === true && r.social?.tiktok === true &&
-      r.manifest?.subtitle_method === "contextual-sentences-idiom-aware-v3" && r.manifest?.candidate?.score >= 80 &&
+      r.manifest?.subtitle_method === "contextual-sentences-idiom-aware-v3" && r.manifest?.candidate?.score >= editorial.minScore &&
       r.manifest?.public_post === false && receipts.length === 2 &&
       receipts.every(row => {const test=JSON.parse(row.script);return !!test.instagram && !!test.tiktok;});
   } catch { verified = false; }
@@ -257,7 +258,7 @@ export async function POST(request: Request) {
     }
     if (action === "readiness") {
       const state = await publicationReadiness(config);
-      const jobs = await database<{id:string}[]>(config,"video_jobs?status=eq.rendered&score=gte.80&select=id&limit=4");
+      const jobs = await database<{id:string}[]>(config,"video_jobs?status=eq.rendered&score=gte." + editorial.minScore + "&select=id&limit=4");
       return NextResponse.json({ok:true,...state,readyJobs:jobs.length,instagram:true,tiktok:true});
     }
     if (action === "schedule") {
