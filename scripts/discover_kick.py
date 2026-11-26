@@ -49,26 +49,37 @@ def collect(slug):
                       and number(a.get("timestamp"))>0 and number(a.get("duration"))>=30
                       and number(a.get("timestamp"))+number(a.get("duration"))<now and game(a)]
     items = []
+    rejected = {key:0 for key in ('metadata','duration','editorial','archive','category')}
     for index, clip in enumerate(sorted(clips,key=lambda x:-number(x.get("view_count")))):
         ident = str(clip.get("id",""))
         ts = number(clip.get("timestamp"))
         duration = number(clip.get("duration"))
         views = number(clip.get("view_count"))
-        if not re.fullmatch(r"clip_[\w-]+",ident) or not 30<=duration<=45 or views<=0 or not now-7*86400<=ts<=now:
+        if not re.fullmatch(r"clip_[\w-]+",ident) or views<=0 or not now-7*86400<=ts<=now:
+            rejected["metadata"] += 1
+            continue
+        if not 30<=duration<=90:
+            rejected["duration"] += 1
             continue
         if clip.get("age_limit",0) == 18 or re.search(r"strip club|private dance|nude|nsfw",str(clip.get("title","")),re.I):
+            rejected["editorial"] += 1
             continue
         # A timestamp match is evidence of a finished VOD, not a platform-provided clip/VOD ID link.
         archive = next((a for a in valid_archives if number(a.get("timestamp"))<=ts<=number(a.get("timestamp"))+number(a.get("duration"))),None)
-        if not archive or not game(clip):
+        if not archive:
+            rejected["archive"] += 1
             continue
+        if not game(clip):
+            rejected["category"] += 1
+            continue
+        output_duration = min(duration,40) if duration>45 else duration
         score = round(min(50,10*math.log10(1+views))+20*(1-index/max(1,len(clips)))+15*max(0,1-(now-ts)/(7*86400))+15)
         items.append({"id":"kick-clip-"+ident,"title":str(clip.get("title") or "Momento de GTA VI"),
                       "url":f"https://kick.com/{slug}/clips/{ident}","channel":str(clip.get("channel") or slug),
                       "channelSlug":slug,"source":"Kick","language":"unknown","views":int(views),"score":score,
-                      "duration":duration,"start":0,"publishedAt":datetime.fromtimestamp(ts,timezone.utc).isoformat(),
-                      "evidence":f"Kick public clip views, rank and recency; timestamp matched completed public GTA VI archive {archive.get('id','')}"})
-    return items,{"channel":slug,"status":"ok","clips":len(clips),"archives":len(archives),"completedGtaArchives":len(valid_archives),"matches":len(items),"qualified":sum(x["score"]>=80 for x in items)}
+                      "duration":output_duration,"sourceDuration":duration,"start":0,"publishedAt":datetime.fromtimestamp(ts,timezone.utc).isoformat(),
+                      "evidence":f"Kick public clip views, rank and recency; timestamp matched completed public GTA VI archive {archive.get('id','')}; score applies to source clip, excerpt starts at 0"})
+    return items,{"channel":slug,"status":"ok","clips":len(clips),"archives":len(archives),"completedGtaArchives":len(valid_archives),"matches":len(items),"qualified":sum(x["score"]>=80 for x in items),"rejected":rejected,"highestScore":max((x["score"] for x in items),default=0)}
 
 def main():
     parser=argparse.ArgumentParser()
