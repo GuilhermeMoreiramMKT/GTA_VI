@@ -228,6 +228,28 @@ export async function POST(request: Request) {
     const config = configuration();
     const channels = await destinations(config);
     const action = new URL(request.url).searchParams.get("action");
+    if (action === "batch-status") {
+      const profiles: Record<string,unknown> = {};
+      for (const platform of platforms) {
+        const data = await bufferQuery<{channel:{displayName:string|null;externalLink:string|null}}>(config,"query { channel(input:{id:"+JSON.stringify(channels[platform])+"}) { displayName externalLink } }");
+        profiles[platform]=data.channel;
+      }
+      const jobs = await database<Job[]>(config,"video_jobs?id=in.(291e9301-d2b9-4b1a-9962-f2c470bdfe35,ae781fa8-f0f6-47b9-b61a-c025e7363e48,210ea188-8530-4ac7-b1fd-14515169dc88)&order=created_at.asc");
+      const posts=[];
+      for (const job of jobs) {
+        const result:Record<string,unknown>={title:job.title,id:job.id};
+        for (const platform of platforms) {
+          const id=platform==="instagram"?job.instagram_id:job.tiktok_id;
+          if (!id) continue;
+          const data=await bufferQuery<{post:{status:string;dueAt:string|null}}>(config,"query { post(input:{id:"+JSON.stringify(id)+"}) { status dueAt } }");
+          result[platform]=data.post;
+        }
+        posts.push(result);
+      }
+      const receipt={profiles,posts,checkedAt:new Date().toISOString()};
+      await database(config,"drafts?on_conflict=id",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({id:"cbb66fd0-aad0-4f4d-b3c2-3d400b92f7cc",trend_id:"radar-user-batch-status",title:"Confirmação dos posts do primeiro lote",script:JSON.stringify(receipt),caption:"Relatório interno",source_url:"https://publish.buffer.com/"})});
+      return NextResponse.json({ok:true,...receipt});
+    }
     if (action === "readiness") {
       const state = await publicationReadiness(config);
       const jobs = await database<{id:string}[]>(config,"video_jobs?status=eq.rendered&score=gte.80&select=id&limit=4");
