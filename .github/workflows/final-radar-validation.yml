@@ -28,27 +28,36 @@ jobs:
           python3 -m venv /tmp/radar-venv
           /tmp/radar-venv/bin/python -m pip install --disable-pip-version-check 'yt-dlp==2026.11.23' 'faster-whisper==1.1.1' 'ctranslate2==4.6.0' 'sentencepiece==0.2.0' 'requests==2.32.5' 'huggingface-hub==0.29.3'
       - name: Verify public discovery and streaming sources
+        id: discovery
         run: |
           set -euo pipefail
           mkdir -p output
           case "$RADAR_BASE_URL" in https://gta-viral-radar.vercel.app|https://gta-viral-radar.vercel.app/) ;; *) exit 1;; esac
           /tmp/radar-venv/bin/python scripts/discover_kick.py --output output/kick.json
+          /tmp/radar-venv/bin/python scripts/discover_kick.py --channels coringa,paulinholokobr,bistecone,gabepeixe --output output/br-comparison.json
           curl -fsS --max-time 65 -H "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/clip-candidates" > output/candidates.json
           python3 - <<'PY'
-          import json
+          import json, os
+          from scripts.produce_candidate import declared_creator
           d=json.load(open("output/candidates.json"))
           k=json.load(open("output/kick.json"))
           print("Providers:", d["providers"], "Kick:", k["provider"], "Qualified Kick clips:", len(k["candidates"]))
           assert d["providers"]["twitch"]=="fulfilled" and d["providers"]["youtube"]=="fulfilled"
-          assert k["provider"]=="ok" and any(x.get("completedGtaArchives",0)>0 for x in k["channels"])
-          d["candidates"]=[c for c in d["candidates"] if c.get("language","").startswith("en") and c["score"]>=80]
-          assert d["candidates"], "No real English candidate available"
+          assert d.get("editorialFocus")=="coringa" and k["provider"]=="ok"
+          d["candidates"]=d["candidates"]+k["candidates"]
+          assert all(declared_creator(c) for c in d["candidates"])
           json.dump(d,open("output/candidates.json","w"))
+          with open(os.environ["GITHUB_OUTPUT"],"a") as out:
+              print("has_candidate="+str(bool(d["candidates"])).lower(),file=out)
+          comparison=json.load(open("output/br-comparison.json"))
+          json.dump({"editorialFocus":"coringa","run":os.environ["GITHUB_RUN_ID"],"comparison":True,"channels":comparison["channels"]},open("output/br-comparison-receipt.json","w"))
           PY
-      - name: Verify contextual translation on a real scored clip
+          curl -fsS --max-time 30 -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" --data-binary @output/br-comparison-receipt.json "${RADAR_BASE_URL%/}/api/cron/production-intake?action=focus-receipt"
+      - name: Verify subtitles on a real scored clip
+        if: steps.discovery.outputs.has_candidate == 'true'
         run: |
           export PATH="/tmp/radar-venv/bin:$PATH"
-          python scripts/produce_candidate.py --candidates output/candidates.json --output output --language en
+          python scripts/produce_candidate.py --candidates output/candidates.json --output output
           python - <<'PY'
           import json
           d=json.load(open("output/manifest.json"))
@@ -81,6 +90,7 @@ jobs:
           name: final-radar-validation
           path: |
             output/kick.json
+            output/br-comparison.json
             output/candidates.json
             output/clip.mp4
             output/manifest.json
@@ -91,7 +101,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Record final validation receipt
-        if: always()
+        if: success() && steps.discovery.outputs.has_candidate == 'true'
         env:
           VALIDATION_RESULT: ${{ job.status }}
         run: |
