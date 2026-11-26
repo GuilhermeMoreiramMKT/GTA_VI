@@ -10,6 +10,7 @@ on:
       - 'scripts/produce_candidate.py'
       - 'scripts/discover_kick.py'
       - 'app/api/cron/production-intake/route.ts'
+      - 'app/api/cron/clip-candidates/route.ts'
 permissions:
   contents: read
 concurrency:
@@ -30,7 +31,7 @@ jobs:
       - name: Discover public Kick clips
         run: |
           mkdir -p output
-          /tmp/radar-venv/bin/python scripts/discover_kick.py --output output/kick.json
+          /tmp/radar-venv/bin/python scripts/discover_kick.py --channels coringa --output output/kick.json
       - name: Discover completed-stream candidates
         id: discover
         env:
@@ -42,7 +43,7 @@ jobs:
           case "$RADAR_BASE_URL" in https://gta-viral-radar.vercel.app|https://gta-viral-radar.vercel.app/) ;; *) exit 1;; esac
           for attempt in {1..24}; do
             code=$(curl -sS --max-time 60 -o output/candidates.json -w '%{http_code}' --header "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/clip-candidates" || true)
-            if [ "$code" = 200 ]; then break; fi
+            if [ "$code" = 200 ] && python3 -c 'import json; assert json.load(open("output/candidates.json")).get("editorialFocus") == "coringa"' 2>/dev/null; then break; fi
             if [ "$code" = 401 ]; then exit 1; fi
             sleep 10
           done
@@ -56,12 +57,19 @@ jobs:
           test "$code" = 200
           python3 - <<'PY'
           import json, os
+          from scripts.produce_candidate import declared_creator
           data = json.load(open("output/candidates.json"))
           state = json.load(open("output/queue.json"))
           kick = json.load(open("output/kick.json"))
+          assert data.get("editorialFocus") == "coringa"
+          assert all(channel["channel"] == "coringa" for channel in kick["channels"])
           data["providers"]["kick"] = kick["provider"]
           merged = {c["id"]: c for c in data["candidates"] + kick["candidates"]}
+          assert all(declared_creator(c) for c in merged.values()), "Unexpected creator in focused discovery"
           candidates = [c for c in merged.values() if c["id"] not in state["excluded"]]
+          receipt = {"editorialFocus":"coringa","run":os.environ["GITHUB_RUN_ID"],"providers":data["providers"],"kick":kick["channels"],"qualified":len(merged),"new":len(candidates),"remaining":state["remaining"]}
+          with open("output/focus.json","w") as file:
+              json.dump(receipt,file)
           data["candidates"] = candidates if state["remaining"] > 0 else []
           json.dump(data, open("output/candidates.json", "w"))
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
@@ -71,6 +79,7 @@ jobs:
           print("Remaining daily capacity:", state["remaining"])
           print("Languages:", sorted({c["language"] for c in candidates}))
           PY
+          curl -fsS --max-time 30 -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" --data-binary @output/focus.json "${RADAR_BASE_URL%/}/api/cron/production-intake?action=focus-receipt"
       - name: Install media and open source language tools
         if: steps.discover.outputs.eligible != '0'
         run: |
