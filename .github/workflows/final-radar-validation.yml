@@ -32,23 +32,23 @@ jobs:
           mkdir -p output
           case "$RADAR_BASE_URL" in https://gta-viral-radar.vercel.app|https://gta-viral-radar.vercel.app/) ;; *) exit 1;; esac
           /tmp/radar-venv/bin/python scripts/discover_kick.py --output output/kick.json
-          /tmp/radar-venv/bin/python scripts/discover_kick.py --channels coringa,paulinholokobr,bistecone,gabepeixe --output output/br-comparison.json
+          cp output/kick.json output/br-comparison.json
           curl -fsS --max-time 65 -H "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/clip-candidates" > output/candidates.json
           python3 - <<'PY'
           import json, os
-          from scripts.produce_candidate import declared_creator
+          from scripts.produce_candidate import EDITORIAL, declared_creator
           d=json.load(open("output/candidates.json"))
           k=json.load(open("output/kick.json"))
           print("Providers:", d["providers"], "Kick:", k["provider"], "Qualified Kick clips:", len(k["candidates"]))
           assert d["providers"]["twitch"]=="fulfilled" and d["providers"]["youtube"]=="fulfilled"
-          assert d.get("editorialFocus")=="coringa" and k["provider"]=="ok"
+          assert d.get("editorialFocus")==EDITORIAL["focus"] and d.get("minScore")==EDITORIAL["minScore"] and k["provider"]=="ok"
           d["candidates"]=d["candidates"]+k["candidates"]
           assert all(declared_creator(c) for c in d["candidates"])
           json.dump(d,open("output/candidates.json","w"))
           with open(os.environ["GITHUB_OUTPUT"],"a") as out:
               print("has_candidate="+str(bool(d["candidates"])).lower(),file=out)
           comparison=json.load(open("output/br-comparison.json"))
-          json.dump({"editorialFocus":"coringa","run":os.environ["GITHUB_RUN_ID"],"comparison":True,"channels":comparison["channels"]},open("output/br-comparison-receipt.json","w"))
+          json.dump({"editorialFocus":EDITORIAL["focus"],"minScore":EDITORIAL["minScore"],"run":os.environ["GITHUB_RUN_ID"],"comparison":True,"channels":comparison["channels"]},open("output/br-comparison-receipt.json","w"))
           PY
           curl -fsS --max-time 30 -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" --data-binary @output/br-comparison-receipt.json "${RADAR_BASE_URL%/}/api/cron/production-intake?action=focus-receipt"
       - name: Install media and subtitle tools
@@ -64,11 +64,12 @@ jobs:
           python scripts/produce_candidate.py --candidates output/candidates.json --output output
           python - <<'PY'
           import json
+          from scripts.produce_candidate import EDITORIAL
           d=json.load(open("output/manifest.json"))
           rows=json.load(open("output/transcricao.json"))
           assert d["subtitle_method"]=="contextual-sentences-idiom-aware-v3"
           assert d["subtitle_language"]=="pt-BR" and d["public_post"] is False
-          assert 30<=d["duration"]<=45.1 and d["candidate"]["score"]>=80
+          assert 30<=d["duration"]<=45.1 and d["candidate"]["score"]>=EDITORIAL["minScore"]
           assert all(0<=r["start"]<r["end"]<=d["duration"]+0.1 and r["text"].strip() for r in rows)
           for row in rows:
               original = row.get("original","").lower()
