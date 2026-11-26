@@ -52,9 +52,10 @@ export async function POST(req: Request) {
     if (action === "validation-receipt") {
       if (!/^\d+$/.test(String(body.run)) || !["success","failure","cancelled","skipped"].includes(body.result) ||
           JSON.stringify(body).length > 30000) return NextResponse.json({error:"Invalid validation receipt"},{status:400});
-      const id = "f9292482-f4c5-40ba-a854-55e324707aa8";
+      const readiness = body.kind === "readiness";
+      const id = readiness ? "5db95897-3d18-4dab-b9b9-ae4432b062da" : "f9292482-f4c5-40ba-a854-55e324707aa8";
       await db("drafts?on_conflict=id",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},
-        body:JSON.stringify({id,trend_id:"radar-final-validation",title:"Validação técnica automática (não publicar)",script:JSON.stringify(body),caption:"Relatório técnico interno",source_url:"https://github.com/GuilhermeMoreiramMKT/GTA_VI/actions/runs/"+body.run})});
+        body:JSON.stringify({id,trend_id:readiness?"radar-publication-readiness":"radar-final-validation",title:readiness?"Verificação de prontidão (não publicar)":"Validação técnica automática (não publicar)",script:JSON.stringify(body),caption:"Relatório técnico interno",source_url:"https://github.com/GuilhermeMoreiramMKT/GTA_VI/actions/runs/"+body.run})});
       return NextResponse.json({ok:true});
     }
     if (action === "reserve") {
