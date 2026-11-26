@@ -45,7 +45,7 @@ def choose(candidates, language):
              and (not language or c.get("language", "").lower().startswith(language))]
     if not valid:
         raise RuntimeError("No candidate meets the score, duration and language requirements")
-    return sorted(valid, key=lambda c: (not declared_creator(c), -c["score"], -c.get("views", 0), c["id"]))[0]
+    return sorted(valid, key=lambda c: (not declared_creator(c), -c["score"], -c.get("humorSignals", 0), -c.get("views", 0), c["id"]))[0]
 
 
 def download(candidate, output):
