@@ -49,6 +49,14 @@ export async function POST(req: Request) {
     const {url,headers} = config();
     const body = await req.json();
     const action = new URL(req.url).searchParams.get("action");
+    if (action === "validation-receipt") {
+      if (!/^\d+$/.test(String(body.run)) || !["success","failure","cancelled","skipped"].includes(body.result) ||
+          JSON.stringify(body).length > 30000) return NextResponse.json({error:"Invalid validation receipt"},{status:400});
+      const id = "f9292482-f4c5-40ba-a854-55e324707aa8";
+      await db("drafts?on_conflict=id",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},
+        body:JSON.stringify({id,trend_id:"radar-final-validation",title:"Validação técnica automática (não publicar)",script:JSON.stringify(body),caption:"Relatório técnico interno",source_url:"https://github.com/GuilhermeMoreiramMKT/GTA_VI/actions/runs/"+body.run})});
+      return NextResponse.json({ok:true});
+    }
     if (action === "reserve") {
       const m = body.manifest, c = m?.candidate;
       if (!c || !Number.isInteger(c.score) || c.score < 80 || c.score > 100 || !Number.isFinite(m.duration) || m.duration < 30 || m.duration > 45.1 || !Number.isInteger(m.subtitle_segments) || m.subtitle_segments < 1 || m.subtitle_language !== "pt-BR" || m.public_post !== false || typeof m.caption !== "string" || !m.caption.trim() || !/^\d+$/.test(body.run)) return NextResponse.json({error:"Invalid manifest"},{status:400});
