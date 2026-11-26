@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   smoke:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'smoke')
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'smoke'
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -60,11 +60,11 @@ jobs:
             --header "Authorization: Bearer $CRON_SECRET" --header 'Content-Type: video/mp4' \
             --data-binary @/tmp/radar-smoke.mp4 "${RADAR_BASE_URL%/}/api/cron/buffer?action=smoke"
   schedule:
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'schedule')
+    if: github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'schedule')
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 9
     steps:
-      - name: Deliver the next eligible rendered job
+      - name: Fill the available daily publication slots
         env:
           RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -72,5 +72,16 @@ jobs:
           set -euo pipefail
           test -n "$RADAR_BASE_URL" && test -n "$CRON_SECRET"
           case "$RADAR_BASE_URL" in https://gta-viral-radar.vercel.app|https://gta-viral-radar.vercel.app/) ;; *) echo "Unexpected radar URL"; exit 1;; esac
-          curl --fail-with-body --show-error --silent --max-time 80 -X POST \
-            --header "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/buffer?action=schedule"
+          available=false
+          for attempt in {1..24}; do
+            code=$(curl -sS --max-time 25 -o /tmp/ready.json -w '%{http_code}' -X POST --header "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/buffer?action=readiness" || true)
+            if [ "$code" = 200 ] && python3 -c 'import json; assert json.load(open("/tmp/ready.json")).get("dailyTarget")==3' 2>/dev/null; then available=true; break; fi
+            if [ "$code" = 401 ] || [ "$code" = 502 ]; then cat /tmp/ready.json; exit 1; fi
+            sleep 10
+          done
+          test "$available" = true
+          for index in 1 2 3; do
+            curl --fail-with-body --show-error --silent --max-time 65 -X POST --header "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/buffer?action=schedule" > /tmp/daily-delivery.json
+            cat /tmp/daily-delivery.json
+            if ! python3 -c 'import json,sys; data=json.load(open("/tmp/daily-delivery.json")); sys.exit(0 if data.get("scheduled")==1 else 1)'; then break; fi
+          done
