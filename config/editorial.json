@@ -16,5 +16,12 @@
   "youtube": [
     "UCnYjd7cPNluC7Hi9AZrBNMw",
     "UCdlJx-w37viXFNq__qZ7ARQ"
+  ],
+  "fallbackMinScore": 0,
+  "dailyPublicationTarget": 3,
+  "publicationTimes": [
+    "11:30",
+    "16:30",
+    "21:30"
   ]
 }
