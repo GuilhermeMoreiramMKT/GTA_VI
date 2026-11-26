@@ -8,6 +8,7 @@ on:
     paths:
       - '.github/workflows/production-validation.yml'
       - 'scripts/produce_candidate.py'
+      - 'scripts/discover_kick.py'
       - 'app/api/cron/production-intake/route.ts'
 permissions:
   contents: read
@@ -22,6 +23,14 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      - name: Install public clip discovery tool
+        run: |
+          python3 -m venv /tmp/radar-venv
+          /tmp/radar-venv/bin/python -m pip install --disable-pip-version-check 'yt-dlp==2026.11.23'
+      - name: Discover public Kick clips
+        run: |
+          mkdir -p output
+          /tmp/radar-venv/bin/python scripts/discover_kick.py --output output/kick.json
       - name: Discover completed-stream candidates
         id: discover
         env:
@@ -49,15 +58,17 @@ jobs:
           import json, os
           data = json.load(open("output/candidates.json"))
           state = json.load(open("output/queue.json"))
-          candidates = [c for c in data["candidates"] if c["id"] not in state["excluded"]]
-          if os.environ["GITHUB_EVENT_NAME"] != "schedule":
-              candidates = [c for c in candidates if c["language"].lower().startswith("en")]
+          kick = json.load(open("output/kick.json"))
+          data["providers"]["kick"] = kick["provider"]
+          merged = {c["id"]: c for c in data["candidates"] + kick["candidates"]}
+          candidates = [c for c in merged.values() if c["id"] not in state["excluded"]]
           data["candidates"] = candidates if state["remaining"] > 0 else []
           json.dump(data, open("output/candidates.json", "w"))
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               print("eligible=" + str(len(data["candidates"])), file=out)
           print("Providers:", data["providers"])
-          print("Eligible candidates:", len(candidates))
+          print("Eligible candidates before daily limit:", len(candidates))
+          print("Remaining daily capacity:", state["remaining"])
           print("Languages:", sorted({c["language"] for c in candidates}))
           PY
       - name: Install media and open source language tools
@@ -65,7 +76,6 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-dejavu-core python3-venv
-          python3 -m venv /tmp/radar-venv
           /tmp/radar-venv/bin/python -m pip install --disable-pip-version-check \
             'yt-dlp==2026.11.23' 'faster-whisper==1.1.1' 'ctranslate2==4.6.0' 'sentencepiece==0.2.0' 'requests==2.32.5' 'huggingface-hub==0.29.3'
       - name: Select, transcribe, translate and render
