@@ -87,15 +87,35 @@ def transcribe(source, duration, working):
     with wave.open(str(audio), "rb") as wav:
         samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
     whisper = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=2)
-    segments, info = whisper.transcribe(samples, beam_size=5, vad_filter=True)
+    segments, info = whisper.transcribe(samples, beam_size=5, vad_filter=True, word_timestamps=True)
     segments = list(segments)
     if not segments or info.language_probability < 0.45:
         raise RuntimeError("Speech could not be reliably identified")
     if info.language not in {"en", "pt"}:
         segments, _ = whisper.transcribe(samples, language=info.language, task="translate", beam_size=3, vad_filter=True)
         segments = list(segments)
-    rows = [{"start": max(0, float(s.start)), "end": min(duration, float(s.end)), "text": s.text.strip()}
-            for s in segments if s.text.strip() and s.end > s.start and s.start < duration]
+    rows = []
+    for segment in segments:
+        words = [w for w in (segment.words or []) if w.start is not None and w.end is not None and w.word.strip()]
+        blocks = []
+        if words:
+            group = []
+            for word in words:
+                if group and (word.end - group[0].start > 5 or len(group) >= 12 or word.start - group[-1].end > 0.65):
+                    blocks.append(group)
+                    group = []
+                group.append(word)
+                if len(group) >= 5 and re.search(r"[.!?;]$", word.word.strip()):
+                    blocks.append(group)
+                    group = []
+            if group:
+                blocks.append(group)
+            for group in blocks:
+                text = "".join(word.word for word in group).strip()
+                rows.append({"start": max(0, group[0].start), "end": min(duration, group[-1].end), "text": text})
+        elif segment.text.strip():
+            rows.append({"start": max(0, segment.start), "end": min(duration, segment.end), "text": segment.text.strip()})
+    rows = [row for row in rows if row["end"] > row["start"] and row["text"]]
     if not rows:
         raise RuntimeError("No usable speech segments")
     for row in rows:
