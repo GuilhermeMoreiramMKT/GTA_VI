@@ -82,6 +82,7 @@ jobs:
             output/clip.mp4
             output/legendagem-pt-br.ass
             output/manifest.json
+            output/transcricao.json
             output/candidates.json
           retention-days: 5
           if-no-files-found: error
