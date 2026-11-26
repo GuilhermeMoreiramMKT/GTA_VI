@@ -1,11 +1,14 @@
 name: GTA Viral Radar - automated production validation
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '13 * * * *'
   push:
     branches: [main]
     paths:
       - '.github/workflows/production-validation.yml'
       - 'scripts/produce_candidate.py'
+      - 'app/api/cron/production-intake/route.ts'
 permissions:
   contents: read
 concurrency:
@@ -20,6 +23,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Discover completed-stream candidates
+        id: discover
         env:
           RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -34,17 +38,30 @@ jobs:
             sleep 10
           done
           test "$code" = 200
+          for attempt in {1..24}; do
+            code=$(curl -sS --max-time 20 -o output/queue.json -w '%{http_code}' --header "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/production-intake" || true)
+            if [ "$code" = 200 ]; then break; fi
+            if [ "$code" = 401 ]; then exit 1; fi
+            sleep 10
+          done
+          test "$code" = 200
           python3 - <<'PY'
-          import json
+          import json, os
           data = json.load(open("output/candidates.json"))
-          candidates = data["candidates"]
+          state = json.load(open("output/queue.json"))
+          candidates = [c for c in data["candidates"] if c["id"] not in state["excluded"]]
+          if os.environ["GITHUB_EVENT_NAME"] != "schedule":
+              candidates = [c for c in candidates if c["language"].lower().startswith("en")]
+          data["candidates"] = candidates if state["remaining"] > 0 else []
+          json.dump(data, open("output/candidates.json", "w"))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              print("eligible=" + str(len(data["candidates"])), file=out)
           print("Providers:", data["providers"])
           print("Eligible candidates:", len(candidates))
           print("Languages:", sorted({c["language"] for c in candidates}))
-          if not any(c["language"].lower().startswith("en") for c in candidates):
-              raise SystemExit("No scored English candidate available for translation validation")
           PY
       - name: Install media and open source language tools
+        if: steps.discover.outputs.eligible != '0'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-dejavu-core python3-venv
@@ -52,10 +69,12 @@ jobs:
           /tmp/radar-venv/bin/python -m pip install --disable-pip-version-check \
             'yt-dlp==2026.11.23' 'faster-whisper==1.1.1' 'ctranslate2==4.6.0' 'sentencepiece==0.2.0' 'requests==2.32.5' 'huggingface-hub==0.29.3'
       - name: Select, transcribe, translate and render
+        if: steps.discover.outputs.eligible != '0'
         run: |
           export PATH="/tmp/radar-venv/bin:$PATH"
-          python scripts/produce_candidate.py --candidates output/candidates.json --output output --language en
+          python scripts/produce_candidate.py --candidates output/candidates.json --output output
       - name: Save validation output
+        if: steps.discover.outputs.eligible != '0'
         uses: actions/upload-artifact@v4
         with:
           name: radar-automated-clip-pt-br
@@ -66,3 +85,39 @@ jobs:
             output/candidates.json
           retention-days: 5
           if-no-files-found: error
+
+      - name: Persist rendered video in production queue
+        if: steps.discover.outputs.eligible != '0'
+        env:
+          RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          /tmp/radar-venv/bin/python - <<'PY'
+          import json, os, pathlib, requests
+          from urllib.parse import urlparse
+          base = os.environ["RADAR_BASE_URL"].rstrip("/") + "/api/cron/production-intake"
+          headers = {"Authorization": "Bearer " + os.environ["CRON_SECRET"]}
+          def post(action, data):
+              res = requests.post(base, params={"action": action}, headers=headers, json=data, timeout=65, allow_redirects=False)
+              if res.status_code != 200:
+                  print("Queue action", action, "failed:", res.status_code, res.text[:300])
+                  raise SystemExit(1)
+              return res.json()
+          manifest = json.load(open("output/manifest.json"))
+          claim = post("reserve", {"manifest": manifest, "run": os.environ["GITHUB_RUN_ID"]})
+          if claim.get("limit") or claim["status"] != "rendering":
+              print("Queue already filled or candidate already processed")
+              raise SystemExit(0)
+          upload = claim["uploadUrl"]
+          target = urlparse(upload)
+          if target.scheme != "https" or target.hostname != "azplyizjvvxwgrbzfphz.supabase.co":
+              raise SystemExit("Unexpected upload origin")
+          path = pathlib.Path("output/clip.mp4")
+          with path.open("rb") as file:
+              result = requests.put(upload, data=file, headers={"Content-Type":"video/mp4","x-upsert":"true"}, timeout=150, allow_redirects=False)
+          if not result.ok:
+              print("Storage upload HTTP", result.status_code)
+              raise SystemExit(1)
+          saved = post("finalize", {"id":claim["id"],"bytes":path.stat().st_size})
+          print("Queue persisted:", saved["status"], "bytes:", saved.get("bytes"))
+          PY
