@@ -61,7 +61,7 @@ def collect(slug):
         if not 30<=duration<=90:
             rejected["duration"] += 1
             continue
-        if clip.get("age_limit",0) == 18 or re.search(r"strip club|private dance|nude|nsfw",str(clip.get("title","")),re.I):
+        if re.search(r"strip club|private dance|nude|nsfw",str(clip.get("title","")),re.I):
             rejected["editorial"] += 1
             continue
         # A timestamp match is evidence of a finished VOD, not a platform-provided clip/VOD ID link.
@@ -73,12 +73,15 @@ def collect(slug):
             rejected["category"] += 1
             continue
         output_duration = min(duration,40) if duration>45 else duration
-        score = round(min(50,10*math.log10(1+views))+20*(1-index/max(1,len(clips)))+15*max(0,1-(now-ts)/(7*86400))+15)
+        score = 0
         items.append({"id":"kick-clip-"+ident,"title":str(clip.get("title") or "Momento de GTA VI"),
                       "url":f"https://kick.com/{slug}/clips/{ident}","channel":str(clip.get("channel") or slug),
                       "channelSlug":slug,"source":"Kick","language":"unknown","views":int(views),"score":score,
                       "duration":output_duration,"sourceDuration":duration,"start":0,"publishedAt":datetime.fromtimestamp(ts,timezone.utc).isoformat(),
-                      "evidence":f"Kick public clip views, rank and recency; timestamp matched completed public GTA VI archive {archive.get('id','')}; score applies to source clip, excerpt starts at 0"})
+                      "evidence":f"Kick public clip views, relative rank among eligible GTA clips and recency; timestamp matched completed public GTA VI archive {archive.get('id','')}; score applies to source clip, excerpt starts at 0"})
+    for rank, item in enumerate(items):
+        age = now - datetime.fromisoformat(item["publishedAt"]).timestamp()
+        item["score"] = round(min(50,10*math.log10(1+item["views"])) + 20*(1-rank/max(1,len(items))) + 15*max(0,1-age/(7*86400)) + 15)
     return items,{"channel":slug,"status":"ok","clips":len(clips),"archives":len(archives),"completedGtaArchives":len(valid_archives),"matches":len(items),"qualified":sum(x["score"]>=80 for x in items),"rejected":rejected,"highestScore":max((x["score"] for x in items),default=0)}
 
 def main():
