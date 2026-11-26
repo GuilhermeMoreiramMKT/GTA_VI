@@ -21,12 +21,10 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Install media tools
+      - name: Install discovery tool
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core python3-venv
           python3 -m venv /tmp/radar-venv
-          /tmp/radar-venv/bin/python -m pip install --disable-pip-version-check 'yt-dlp==2026.11.23' 'faster-whisper==1.1.1' 'ctranslate2==4.6.0' 'sentencepiece==0.2.0' 'requests==2.32.5' 'huggingface-hub==0.29.3'
+          /tmp/radar-venv/bin/python -m pip install --disable-pip-version-check 'yt-dlp==2026.11.23'
       - name: Verify public discovery and streaming sources
         id: discovery
         run: |
@@ -53,6 +51,12 @@ jobs:
           json.dump({"editorialFocus":"coringa","run":os.environ["GITHUB_RUN_ID"],"comparison":True,"channels":comparison["channels"]},open("output/br-comparison-receipt.json","w"))
           PY
           curl -fsS --max-time 30 -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" --data-binary @output/br-comparison-receipt.json "${RADAR_BASE_URL%/}/api/cron/production-intake?action=focus-receipt"
+      - name: Install media and subtitle tools
+        if: steps.discovery.outputs.has_candidate == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          /tmp/radar-venv/bin/python -m pip install --disable-pip-version-check 'faster-whisper==1.1.1' 'ctranslate2==4.6.0' 'sentencepiece==0.2.0' 'requests==2.32.5' 'huggingface-hub==0.29.3'
       - name: Verify subtitles on a real scored clip
         if: steps.discovery.outputs.has_candidate == 'true'
         run: |
@@ -73,10 +77,10 @@ jobs:
               if "where they work out" in original: assert "trabalham fora" not in translated
           print("Validated segments:", len(rows), "Duration:",d["duration"],"Score:",d["candidate"]["score"])
           PY
-      - name: Confirm both social destinations and paused publication
+      - name: Check both social destinations
         run: |
           set -euo pipefail
-          curl -fsS --max-time 60 -X POST -H "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/buffer?action=health" > output/social-health.json
+          curl --fail-with-body --silent --show-error --retry 2 --retry-delay 5 --max-time 60 -X POST -H "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/buffer?action=health" > output/social-health.json || { cat output/social-health.json; exit 1; }
           python3 - <<'PY'
           import json
           h=json.load(open("output/social-health.json"))
