@@ -12,7 +12,8 @@ import time
 from urllib.parse import urlparse
 
 GTA = re.compile(r"\b(?:gta|grand theft auto)\s*(?:vi|6)\b", re.I)
-DEFAULT = "coringa,xqc,westcol,adinross"
+DEFAULT = "coringa"
+HUMOR_SIGNAL = re.compile(r"\bk{3,}\b|\b(?:engraçad[oa]s?|risadas?|rach[eo]i|hilári[oa]s?|zoeira)\b|[😂🤣]", re.I)
 
 class Quiet:
     def debug(self, message): pass
@@ -77,6 +78,7 @@ def collect(slug):
         items.append({"id":"kick-clip-"+ident,"title":str(clip.get("title") or "Momento de GTA VI"),
                       "url":f"https://kick.com/{slug}/clips/{ident}","channel":str(clip.get("channel") or slug),
                       "channelSlug":slug,"source":"Kick","language":"unknown","views":int(views),"score":score,
+                      "humorSignals":int(bool(HUMOR_SIGNAL.search(str(clip.get("title",""))))),
                       "duration":output_duration,"sourceDuration":duration,"start":0,"publishedAt":datetime.fromtimestamp(ts,timezone.utc).isoformat(),
                       "evidence":f"Kick public clip views, relative rank among eligible GTA clips and recency; timestamp matched completed public GTA VI archive {archive.get('id','')}; score applies to source clip, excerpt starts at 0"})
     for rank, item in enumerate(items):
