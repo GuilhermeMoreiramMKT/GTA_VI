@@ -83,3 +83,29 @@ jobs:
             output/social-health.json
           retention-days: 5
           if-no-files-found: warn
+
+      - name: Record final validation receipt
+        if: always()
+        env:
+          VALIDATION_RESULT: ${{ job.status }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          def read(name):
+              try: return json.loads(Path("output",name).read_text())
+              except (ValueError,OSError): return None
+          kick=read("kick.json") or {}
+          candidates=read("candidates.json") or {}
+          manifest=read("manifest.json")
+          rows=read("transcricao.json") or []
+          payload={"run":os.environ["GITHUB_RUN_ID"],"result":os.environ["VALIDATION_RESULT"],"kick":{k:kick.get(k) for k in ("provider","channels")},"providers":candidates.get("providers"),"candidateCount":len(candidates.get("candidates",[])),"manifest":manifest,"subtitleSample":rows[:8],"social":read("social-health.json")}
+          Path("/tmp/radar-final-receipt.json").write_text(json.dumps(payload))
+          PY
+          for attempt in {1..24}; do
+            code=$(curl -sS --max-time 30 -o /tmp/radar-record-result.json -w '%{http_code}' -X POST -H "Authorization: Bearer $CRON_SECRET" -H 'Content-Type: application/json' --data-binary @/tmp/radar-final-receipt.json "${RADAR_BASE_URL%/}/api/cron/production-intake?action=validation-receipt" || true)
+            if [ "$code" = 200 ]; then echo "Validation receipt stored"; exit 0; fi
+            if [ "$code" = 401 ]; then exit 1; fi
+            sleep 10
+          done
+          echo "Validation receipt unavailable"; exit 1
