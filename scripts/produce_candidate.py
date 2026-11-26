@@ -45,7 +45,7 @@ def declared_creator(candidate):
 
 def choose(candidates, language):
     valid = [c for c in candidates if isinstance(c.get("score"), (float, int))
-             and EDITORIAL["minScore"] <= c["score"] <= 100 and 30 <= c["duration"] <= 45
+             and EDITORIAL["fallbackMinScore"] <= c["score"] <= 100 and 30 <= c["duration"] <= 45
              and (not language or c.get("language", "").lower().startswith(language))]
     if not valid:
         raise RuntimeError("No candidate meets the score, duration and language requirements")
