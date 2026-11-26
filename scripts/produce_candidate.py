@@ -52,6 +52,22 @@ def download(candidate, output):
     run(*command, "-o", output, candidate["url"])
 
 
+def natural_english(text):
+    """Disambiguate common spoken/game idioms before machine translation without inventing meaning."""
+    rules = (
+        (r"\b(?:just\s+)?like\s+ingest\s+everything\s+about\b", "learn everything about"),
+        (r"\bingest\s+everything\s+about\b", "learn everything about"),
+        (r"\b(where\s+(?:they|you|we|I|he|she)\s+)work\s+out\b", r"\1exercise"),
+        (r"\bscrolling\s+on\b", "browsing"),
+        (r"\b(?:it(?:'|’)s|it is)\s+just\s+so\s+crazy\s+what\b", "It is amazing what"),
+        (r"\bthat(?:'|’)s\s+called\b", "that is called"),
+        (r"\b(?:I|we)\s+mean,?\s+(?:like,?\s+)?", ""),
+    )
+    for pattern, replacement in rules:
+        text = re.sub(pattern, replacement, text, flags=re.I)
+    return text.strip()
+
+
 class BrazilianTranslator:
     """OPUS-MT English→Brazilian Portuguese, Helsinki-NLP (CC BY 4.0), int8 conversion."""
     def __init__(self, folder):
@@ -71,7 +87,7 @@ class BrazilianTranslator:
     def translate(self, texts):
         if not texts:
             return []
-        inputs = [[">>pob<<"] + self.source.encode(text, out_type=str) + ["</s>"] for text in texts]
+        inputs = [[">>pob<<"] + self.source.encode(natural_english(text) or text, out_type=str) + ["</s>"] for text in texts]
         results = self.model.translate_batch(inputs, beam_size=4)
         return [self.target.decode(result.hypotheses[0]) for result in results]
 
@@ -201,6 +217,8 @@ def produce(candidate, output):
         raise RuntimeError("Downloaded interval has an invalid duration")
     rows, language, translator = transcribe(source, length, working)
     title = clean(candidate["title"])[:100]
+    if title == title.upper():
+        title = title.lower().capitalize()
     if translator and candidate.get("language", "").startswith("en") and len(title) >= 8:
         title = translator.translate([title])[0]
     elif language != "pt" or len(title) < 8:
@@ -223,7 +241,7 @@ def produce(candidate, output):
     if (video["width"], video["height"]) != (1080, 1920) or not any(s["codec_type"] == "audio" for s in result["streams"]):
         raise RuntimeError("Invalid rendered media")
     manifest = {"candidate": candidate, "detected_language": language, "subtitle_language": "pt-BR",
-                "subtitle_segments": len(rows), "transcription_model": "faster-whisper-small", "subtitle_method": "contextual-sentences-weighted-timing-v2", "duration": float(result["format"]["duration"]),
+                "subtitle_segments": len(rows), "transcription_model": "faster-whisper-small", "subtitle_method": "contextual-sentences-idiom-aware-v3", "duration": float(result["format"]["duration"]),
                 "caption": title + " | " + clean(candidate["channel"]) + " #GTAVI #GTA6 #GTAViralRadar",
                 "status": "rendered_validation", "public_post": False}
     (output / "transcricao.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
