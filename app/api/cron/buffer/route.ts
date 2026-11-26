@@ -174,7 +174,7 @@ export async function POST(request: Request) {
     const config = configuration();
     const channels = await destinations(config);
     const action = new URL(request.url).searchParams.get("action");
-    if (action === "schedule") return NextResponse.json({ ok: true, ...await scheduleOne(config, channels) });
+    if (action === "schedule") return NextResponse.json({ ok: true, scheduled: 0, paused: true, reason: "Production validation pending" });
     if (action === "smoke") return await smokeTest(config, request, channels);
     if (action === "health") return NextResponse.json({ ok: true, instagram: true, tiktok: true });
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
