@@ -60,18 +60,28 @@ async function twitchCandidates(): Promise<Candidate[]> {
 async function youtubeCandidates(): Promise<Candidate[]> {
   const key = process.env.YOUTUBE_API_KEY;
   if (!key) throw new Error("YouTube API unavailable");
-  const ids = [...new Set((process.env.YOUTUBE_LIVE_VIDEO_IDS || "mQ4CfLekrFI,QhKWnCPIhiU,nTJ5Z9gZsZU").split(",").map(x => x.trim()).filter(x => /^[A-Za-z0-9_-]{11}$/.test(x)))].slice(0, 5);
+  const configured = (process.env.YOUTUBE_LIVE_VIDEO_IDS || "mQ4CfLekrFI,QhKWnCPIhiU,nTJ5Z9gZsZU").split(",").map(x => x.trim()).filter(x => /^[A-Za-z0-9_-]{11}$/.test(x));
+  // Find current, popular completed GTA VI broadcasts rather than relying only on static IDs.
+  let discovered: string[] = [];
+  try {
+    const search = await requestJson("https://www.googleapis.com/youtube/v3/search?" + new URLSearchParams({
+      part:"snippet", type:"video", eventType:"completed", q:"GTA VI|GTA 6", order:"viewCount",
+      publishedAfter:new Date(Date.now()-7*86400000).toISOString(), maxResults:"10", key
+    }));
+    discovered = (search.items || []).map((item: any) => item.id?.videoId).filter((id: any) => typeof id === "string" && /^[A-Za-z0-9_-]{11}$/.test(id));
+  } catch { /* Fixed authorized archive IDs remain available when discovery is rate-limited. */ }
+  const ids = [...new Set([...configured, ...discovered])].slice(0, 10);
   const videos = await requestJson("https://www.googleapis.com/youtube/v3/videos?" + new URLSearchParams({ part: "snippet,liveStreamingDetails,contentDetails", id: ids.join(","), key }));
   const candidates: Candidate[] = [];
-  for (const video of videos.items || []) {
-    if (!video.liveStreamingDetails?.actualEndTime || !/gta\s*(vi|6)|grand theft auto\s*(vi|6)/i.test(video.snippet.title)) continue;
+  await Promise.allSettled((videos.items || []).map(async (video: any) => {
+    if (!video.liveStreamingDetails?.actualEndTime || !/gta\s*(vi|6)|grand theft auto\s*(vi|6)/i.test(video.snippet.title)) return;
     const end = Date.parse(video.liveStreamingDetails.actualEndTime), start = Date.parse(video.liveStreamingDetails.actualStartTime);
     const available = (end - start) / 1000;
-    if (!Number.isFinite(available) || available < 45) continue;
+    if (!Number.isFinite(available) || available < 45) return;
     let comments;
     try {
       comments = await requestJson("https://www.googleapis.com/youtube/v3/commentThreads?" + new URLSearchParams({ part: "snippet", videoId: video.id, maxResults: "100", order: "relevance", textFormat: "plainText", key }));
-    } catch { continue; }
+    } catch { return; }
     const buckets = new Map<number, { authors: Set<string>; likes: number }>();
     for (const item of comments.items || []) {
       const comment = item.snippet?.topLevelComment?.snippet;
@@ -92,7 +102,7 @@ async function youtubeCandidates(): Promise<Candidate[]> {
       const score = Math.round(Math.min(50, 12 * Math.log2(1 + b.authors.size)) + Math.min(35, 8 * Math.log10(1 + b.likes)) + 15);
       candidates.push({ id: "youtube-moment-" + video.id + "-" + offset, title: "Momento comentado da live de " + video.snippet.channelTitle, url: "https://www.youtube.com/watch?v=" + video.id, channel: video.snippet.channelTitle, source: "YouTube", language: video.snippet.defaultAudioLanguage || "unknown", views: 0, score, duration: 40, start: Math.max(0, offset - 5), publishedAt: video.liveStreamingDetails.actualEndTime, evidence: b.authors.size + " independent timestamp comments and " + b.likes + " likes" });
     }
-  }
+  }));
   return candidates;
 }
 
