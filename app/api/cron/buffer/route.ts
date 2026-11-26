@@ -59,14 +59,19 @@ async function bufferQuery<T>(config: Config, query: string, variables?: object)
 async function destinations(config: Config): Promise<Record<Platform, string>> {
   const { account } = await bufferQuery<{ account: { organizations: { id: string }[] } }>(config, "query { account { organizations { id } } }");
   const pairs: Record<Platform, string>[] = [];
+  const availability: string[] = [];
   for (const organization of account.organizations) {
     const data = await bufferQuery<{ channels: Channel[] }>(config, "query { channels(input: { organizationId: " + JSON.stringify(organization.id) + " }) { id service isDisconnected isLocked isQueuePaused } }");
     const selected = platforms.map(platform => data.channels.filter(channel => channel.service.toLowerCase() === platform));
+    availability.push(selected.map((channels, index) => {
+      const states = channels.map(channel => [channel.isDisconnected && "disconnected", channel.isLocked && "locked", channel.isQueuePaused && "paused"].filter(Boolean).join("+") || "active");
+      return platforms[index] + "=" + (states.join(",") || "missing");
+    }).join("; "));
     if (selected.every(channels => channels.length === 1 && !channels[0].isDisconnected && !channels[0].isLocked && !channels[0].isQueuePaused)) {
       pairs.push({ instagram: selected[0][0].id, tiktok: selected[1][0].id });
     }
   }
-  if (pairs.length !== 1) throw new Error("Expected exactly one active Instagram and TikTok channel pair");
+  if (pairs.length !== 1) throw new Error("Expected exactly one active Instagram and TikTok channel pair (" + (availability.join(" | ") || "no organization") + ")");
   return pairs[0];
 }
 
