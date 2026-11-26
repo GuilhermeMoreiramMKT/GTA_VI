@@ -77,6 +77,14 @@ export async function POST(req: Request) {
       await db("video_jobs?id=eq."+job.id+"&status=eq.review",{method:"PATCH",body:JSON.stringify({status:"rendered",rights_ref:ref,caption:requested[job.id],video_url:videoUrl,error:null})});
       return NextResponse.json({id:job.id,status:"rendered",bytes:bytes.length});
     }
+    if (action === "focus-receipt") {
+      if (!/^\d+$/.test(String(body.run)) || body.editorialFocus !== "coringa" || JSON.stringify(body).length > 10000) {
+        return NextResponse.json({error:"Invalid focus receipt"},{status:400});
+      }
+      await db("drafts?on_conflict=id",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},
+        body:JSON.stringify({id:"f7275a41-371d-4a52-82d6-d115edc45409",trend_id:"radar-editorial-focus",title:"Monitoramento de cortes do Coringa",script:JSON.stringify(body),caption:"Resumo da busca automática",source_url:"https://github.com/GuilhermeMoreiramMKT/GTA_VI/actions/runs/"+body.run})});
+      return NextResponse.json({ok:true});
+    }
     if (action === "validation-receipt") {
       if (!/^\d+$/.test(String(body.run)) || !["success","failure","cancelled","skipped"].includes(body.result) ||
           JSON.stringify(body).length > 30000) return NextResponse.json({error:"Invalid validation receipt"},{status:400});
@@ -101,6 +109,7 @@ export async function POST(req: Request) {
         (c.source === "YouTube" && ["youtube.com","www.youtube.com","youtu.be"].includes(source.hostname) &&
           (c.creatorId === "UCnYjd7cPNluC7Hi9AZrBNMw" || ["mQ4CfLekrFI","QhKWnCPIhiU"].includes(source.searchParams.get("v") || "")));
 
+      if (!authorized) return NextResponse.json({error:"New production is focused on Coringa"},{status:400});
       const claim = await db("rpc/reserve_rendered_candidate",{method:"POST",body:JSON.stringify({p_manifest:m,p_run:String(body.run),p_authorized:authorized})});
       if (claim.limit || claim.status !== "rendering") return NextResponse.json(claim);
       const {job,asset} = await jobAndAsset(claim.id);
