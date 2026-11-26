@@ -99,7 +99,7 @@ async function scheduleOne(config: Config, channels: Record<Platform, string>) {
     const assets = await database<Asset[]>(config, "radar_assets?trend_id=eq." + encodeURIComponent(job.trend_id) + "&limit=1");
     const asset = assets[0];
     const prefix = config.url + "/storage/v1/object/public/" + bucket + "/";
-    if (!asset?.authorized || !asset.editorial_verified || asset.rights_ref !== job.rights_ref || Date.parse(asset.expires_at) < Date.now() + 30 * 86400000 || !job.caption || !job.video_url?.startsWith(prefix)) {
+    if (!asset?.authorized || !asset.editorial_verified || asset.rights_ref !== job.rights_ref || (asset.expires_at !== "infinity" && (!Number.isFinite(Date.parse(asset.expires_at)) || Date.parse(asset.expires_at) < Date.now() + 30 * 86400000)) || !job.caption || !job.video_url?.startsWith(prefix)) {
       await patchJob(config, job.id, { status: "blocked", error: "Media, rights, caption or score verification required" });
       continue;
     }
@@ -174,7 +174,10 @@ export async function POST(request: Request) {
     const config = configuration();
     const channels = await destinations(config);
     const action = new URL(request.url).searchParams.get("action");
-    if (action === "schedule") return NextResponse.json({ ok: true, scheduled: 0, paused: true, reason: "Production validation pending" });
+    if (action === "schedule") {
+      if (process.env.RADAR_AUTO_PUBLISH !== "true") return NextResponse.json({ ok: true, scheduled: 0, paused: true, reason: "Production validation pending" });
+      return NextResponse.json({ ok: true, ...await scheduleOne(config, channels) });
+    }
     if (action === "smoke") return await smokeTest(config, request, channels);
     if (action === "health") return NextResponse.json({ ok: true, instagram: true, tiktok: true });
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
