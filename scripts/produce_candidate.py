@@ -53,35 +53,27 @@ def download(candidate, output):
 
 
 class BrazilianTranslator:
+    """OPUS-MT English→Brazilian Portuguese, Helsinki-NLP (CC BY 4.0), int8 conversion."""
     def __init__(self, folder):
         import ctranslate2
         import sentencepiece
+        from huggingface_hub import snapshot_download
 
-        folder.mkdir(parents=True, exist_ok=True)
-        archive = folder / "en-pb.argosmodel"
-        if not archive.exists():
-            with urllib.request.urlopen(MODEL_URL, timeout=90) as response, archive.open("wb") as file:
-                while chunk := response.read(1024 * 1024):
-                    file.write(chunk)
-        with zipfile.ZipFile(archive) as bundle:
-            for member in bundle.infolist():
-                name = Path(member.filename)
-                if name.is_absolute() or ".." in name.parts:
-                    raise ValueError("Unexpected model archive path")
-            bundle.extractall(folder)
-        roots = [p.parent for p in folder.rglob("sentencepiece.model") if (p.parent / "model").is_dir()]
-        if len(roots) != 1:
-            raise RuntimeError("Brazilian Portuguese model not found")
-        root = roots[0]
-        self.tokenizer = sentencepiece.SentencePieceProcessor(model_file=str(root / "sentencepiece.model"))
-        self.model = ctranslate2.Translator(str(root / "model"), device="cpu", compute_type="int8", intra_threads=2)
+        root = Path(snapshot_download(
+            "gow-solucoes/opus-mt-en-pt-ct2",
+            revision="884d230",
+            allow_patterns=["config.json", "model.bin", "shared_vocabulary.json", "source.spm", "target.spm"]
+        ))
+        self.source = sentencepiece.SentencePieceProcessor(model_file=str(root / "source.spm"))
+        self.target = sentencepiece.SentencePieceProcessor(model_file=str(root / "target.spm"))
+        self.model = ctranslate2.Translator(str(root), device="cpu", compute_type="int8", intra_threads=2)
 
     def translate(self, texts):
         if not texts:
             return []
-        inputs = [self.tokenizer.encode(text, out_type=str) for text in texts]
+        inputs = [[">>pob<<"] + self.source.encode(text, out_type=str) + ["</s>"] for text in texts]
         results = self.model.translate_batch(inputs, beam_size=4)
-        return [self.tokenizer.decode(result.hypotheses[0]) for result in results]
+        return [self.target.decode(result.hypotheses[0]) for result in results]
 
 
 def transcribe(source, duration, working):
