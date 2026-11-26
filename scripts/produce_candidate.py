@@ -25,13 +25,27 @@ def probe(path):
     ]))
 
 
+def declared_creator(candidate):
+    """Prioritize candidates from the creator whose publication rights were declared."""
+    source = urlparse(candidate.get("url",""))
+    slug = str(candidate.get("channelSlug","")).lower()
+    if candidate.get("source") == "Kick":
+        return source.hostname in {"kick.com","www.kick.com"} and slug=="coringa" and source.path.split("/")[1:2]==["coringa"]
+    if candidate.get("source") == "Twitch":
+        return source.hostname in {"twitch.tv","www.twitch.tv","clips.twitch.tv"} and slug in {"coringa","loud_coringa"}
+    if candidate.get("source") == "YouTube":
+        from urllib.parse import parse_qs
+        return source.hostname in {"youtube.com","www.youtube.com","youtu.be"} and (candidate.get("creatorId")=="UCnYjd7cPNluC7Hi9AZrBNMw" or parse_qs(source.query).get("v",[""])[0] in {"mQ4CfLekrFI","QhKWnCPIhiU"})
+    return False
+
+
 def choose(candidates, language):
     valid = [c for c in candidates if isinstance(c.get("score"), (float, int))
              and 80 <= c["score"] <= 100 and 30 <= c["duration"] <= 45
              and (not language or c.get("language", "").lower().startswith(language))]
     if not valid:
         raise RuntimeError("No candidate meets the score, duration and language requirements")
-    return sorted(valid, key=lambda c: (-c["score"], -c.get("views", 0), c["id"]))[0]
+    return sorted(valid, key=lambda c: (not declared_creator(c), -c["score"], -c.get("views", 0), c["id"]))[0]
 
 
 def download(candidate, output):
@@ -61,7 +75,6 @@ def natural_english(text):
         (r"\bscrolling\s+on\b", "browsing"),
         (r"\b(?:it(?:'|’)s|it is)\s+just\s+so\s+crazy\s+what\b", "It is amazing what"),
         (r"\bthat(?:'|’)s\s+called\b", "that is called"),
-        (r"\b(?:I|we)\s+mean,?\s+(?:like,?\s+)?", ""),
     )
     for pattern, replacement in rules:
         text = re.sub(pattern, replacement, text, flags=re.I)
