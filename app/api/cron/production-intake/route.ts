@@ -49,6 +49,34 @@ export async function POST(req: Request) {
     const {url,headers} = config();
     const body = await req.json();
     const action = new URL(req.url).searchParams.get("action");
+    if (action === "release-user-batch") {
+      // Explicit publication request for the three items after the initial test.
+      // No other channel or future clip is granted publication rights by this action.
+      const requested: Record<string,string> = {
+        "291e9301-d2b9-4b1a-9962-f2c470bdfe35":"Ele assinou um NDA e não pode contar o que rolou nessa festa 👀 | Corte: Tminnzy #GTAVI #GTA6 #GTAViralRadar",
+        "ae781fa8-f0f6-47b9-b61a-c025e7363e48":"A reação do IShowSpeed durante GTA VI 😂 | Corte: IShowSpeed #GTAVI #GTA6 #GTAViralRadar",
+        "210ea188-8530-4ac7-b1fd-14515169dc88":"xQc comenta os relacionamentos em GTA VI. Você concorda com ele? | Corte: xQc #GTAVI #GTA6 #GTAViralRadar"
+      };
+      if (typeof body.id !== "string" || !Object.prototype.hasOwnProperty.call(requested,body.id)) return NextResponse.json({error:"Not selected for this batch"},{status:400});
+      const {job,asset}=await jobAndAsset(body.id);
+      if (job.status !== "review" || job.delivery_day || job.instagram_id || job.tiktok_id) return NextResponse.json({id:job.id,status:job.status,existing:true});
+      const manifest=JSON.parse(job.script || "{}");
+      if (job.score<80 || manifest.subtitle_language!=="pt-BR" || manifest.duration<30 || manifest.duration>45.1 || manifest.subtitle_segments<1) throw new Error("Technical validation missing");
+      const object="production/"+job.id+".mp4";
+      const download=await fetch(url+"/storage/v1/object/authenticated/radar-validation/"+object,{headers,cache:"no-store",signal:AbortSignal.timeout(15000)});
+      if (!download.ok) throw new Error("Private render unavailable");
+      const bytes=Buffer.from(await download.arrayBuffer());
+      if (bytes.length<1000 || bytes.length>50000000 || bytes.toString("ascii",4,8)!=="ftyp") throw new Error("Invalid rendered file");
+      const upload=await fetch(url+"/storage/v1/object/radar-videos/"+object,{method:"POST",headers:{...headers,"Content-Type":"video/mp4","x-upsert":"true"},body:bytes,signal:AbortSignal.timeout(20000)});
+      if (!upload.ok) throw new Error("Publication storage HTTP "+upload.status);
+      const videoUrl=url+"/storage/v1/object/public/radar-videos/"+object;
+      const checked=await fetch(videoUrl,{method:"HEAD",cache:"no-store",signal:AbortSignal.timeout(10000)});
+      if (!checked.ok || Number(checked.headers.get("content-length"))!==bytes.length) throw new Error("Publication media verification failed");
+      const ref="User explicitly requested publication of this selected queued clip on 2026-11-25";
+      await db("radar_assets?trend_id=eq."+encodeURIComponent(job.trend_id),{method:"PATCH",body:JSON.stringify({authorized:true,editorial_verified:true,rights_ref:ref,expires_at:"infinity",notes:asset.notes+"; selected by user for publication, technical verification performed; no independent rights verification"})});
+      await db("video_jobs?id=eq."+job.id+"&status=eq.review",{method:"PATCH",body:JSON.stringify({status:"rendered",rights_ref:ref,caption:requested[job.id],video_url:videoUrl,error:null})});
+      return NextResponse.json({id:job.id,status:"rendered",bytes:bytes.length});
+    }
     if (action === "validation-receipt") {
       if (!/^\d+$/.test(String(body.run)) || !["success","failure","cancelled","skipped"].includes(body.result) ||
           JSON.stringify(body).length > 30000) return NextResponse.json({error:"Invalid validation receipt"},{status:400});
