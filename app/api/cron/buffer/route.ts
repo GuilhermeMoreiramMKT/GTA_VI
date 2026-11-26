@@ -168,6 +168,44 @@ async function smokeTest(config: Config, request: Request, channels: Record<Plat
   }
 }
 
+async function verifyRenderedDraft(config: Config, channels: Record<Platform, string>) {
+  // One fixed validation receipt; never create a public post or retry an ambiguous remote mutation.
+  const receiptId = "df9a4cdb-b26e-4564-89fa-68efd564edc3";
+  const receiptPath = "drafts?id=eq." + receiptId;
+  const existing = await database<{script:string}[]>(config, receiptPath + "&select=script");
+  if (existing.length) {
+    const receipt = JSON.parse(existing[0].script);
+    return NextResponse.json({ok:!!receipt.instagram && !!receipt.tiktok,instagram:!!receipt.instagram,tiktok:!!receipt.tiktok,existing:true,draft:true});
+  }
+  const [job] = await database<Job[]>(config, jobPath(receiptId) + "&status=eq.review&score=gte.80");
+  if (!job?.caption) return NextResponse.json({error:"Validated test asset unavailable"},{status:404});
+  const object = "production/" + job.id + ".mp4";
+  const response = await fetch(config.url+"/storage/v1/object/sign/radar-validation/"+object,{
+    method:"POST",headers:{apikey:config.key,Authorization:"Bearer "+config.key,"Content-Type":"application/json"},
+    body:JSON.stringify({expiresIn:86400}),cache:"no-store",signal:AbortSignal.timeout(10000)
+  });
+  if (!response.ok) throw new Error("Validation media signing HTTP "+response.status);
+  const result = await response.json();
+  const signed = new URL(result.signedURL || result.signedUrl, config.url+"/storage/v1/");
+  const videoUrl = signed.pathname.startsWith("/object/") ? config.url+"/storage/v1"+signed.pathname+signed.search : signed.toString();
+  if (new URL(videoUrl).origin !== new URL(config.url).origin) throw new Error("Unexpected validation media origin");
+  const inserted = await database<{id:string}[]>(config,"drafts?on_conflict=id",{
+    method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=representation"},
+    body:JSON.stringify({id:receiptId,trend_id:job.trend_id,title:"Teste de produção automática — não publicar",script:"{}",caption:job.caption,source_url:"https://www.twitch.tv/tminnzy/clip/AntsyPolishedKoupreyBibleThump-NHTlUqUqyb4BUNY3"})
+  });
+  if (!inserted.length) return NextResponse.json({error:"Validation receipt already claimed"},{status:409});
+  const receipt:Partial<Record<Platform,string>>={};
+  try {
+    for (const platform of platforms) {
+      receipt[platform]=await send(config,channels[platform],platform,job.caption,videoUrl,true);
+      await database(config,receiptPath,{method:"PATCH",body:JSON.stringify({script:JSON.stringify(receipt)})});
+    }
+    return NextResponse.json({ok:true,instagram:true,tiktok:true,draft:true});
+  } catch {
+    return NextResponse.json({ok:false,instagram:!!receipt.instagram,tiktok:!!receipt.tiktok,review:true,draft:true},{status:502});
+  }
+}
+
 export async function POST(request: Request) {
   if (!authenticated(request)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   try {
@@ -178,6 +216,7 @@ export async function POST(request: Request) {
       if (process.env.RADAR_AUTO_PUBLISH !== "true") return NextResponse.json({ ok: true, scheduled: 0, paused: true, reason: "Production validation pending" });
       return NextResponse.json({ ok: true, ...await scheduleOne(config, channels) });
     }
+    if (action === "verify-rendered") return await verifyRenderedDraft(config, channels);
     if (action === "smoke") return await smokeTest(config, request, channels);
     if (action === "health") return NextResponse.json({ ok: true, instagram: true, tiktok: true });
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
