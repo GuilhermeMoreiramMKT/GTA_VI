@@ -95,11 +95,11 @@ def main():
     slugs=list(dict.fromkeys(s.strip().lower() for s in args.channels.split(",") if re.fullmatch(r"[a-zA-Z0-9_-]{1,40}",s.strip())))[:8]
     with ThreadPoolExecutor(max_workers=3) as pool:
         result=list(pool.map(collect,slugs))
-    candidates=sorted([item for items,_ in result for item in items if item["score"]>=EDITORIAL["minScore"]],key=lambda x:-x["score"])
+    candidates=sorted([item for items,_ in result for item in items if item["score"]>=EDITORIAL["fallbackMinScore"]],key=lambda x:-x["score"])
     reports=[report for _,report in result]
     payload={"candidates":candidates,"channels":reports,"provider":"ok" if any(x["status"]=="ok" for x in reports) else "unavailable"}
     Path(args.output).write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
-    print(json.dumps({"provider":payload["provider"],"channels":reports,"qualified":len(candidates)}))
+    print(json.dumps({"provider":payload["provider"],"channels":reports,"qualified":sum(c["score"]>=EDITORIAL["minScore"] for c in candidates),"fallback":sum(c["score"]<EDITORIAL["minScore"] for c in candidates)}))
 
 if __name__=="__main__":
     main()
