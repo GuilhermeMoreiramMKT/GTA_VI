@@ -78,7 +78,8 @@ def download(candidate, output):
     command = ["python3", "-m", "yt_dlp", "--ignore-config", "--no-playlist", "--no-cache-dir",
                "--no-progress", "--socket-timeout", "20", "--retries", "1",
                "-f", "bv*[height<=720]+ba/b[height<=720]/b", "--merge-output-format", "mp4"]
-    if candidate["source"] == "YouTube":
+    is_kick_replay = candidate["source"] == "Kick" and source.path.startswith("/coringa/videos/")
+    if candidate["source"] == "YouTube" or is_kick_replay:
         start = float(candidate["start"])
         if not math.isfinite(start) or start < 0:
             raise ValueError("Invalid start")

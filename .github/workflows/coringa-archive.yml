@@ -1,0 +1,53 @@
+name: GTA Viral Radar - Coringa archive
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/coringa-archive.yml'
+      - 'scripts/scan_coringa_archive.py'
+permissions:
+  contents: read
+concurrency:
+  group: coringa-archive
+  cancel-in-progress: false
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 160
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        day: [2, 3, 4, 5]
+        shard: [0, 1, 2, 3]
+        include:
+          - day: 2
+            shard: 4
+        exclude:
+          - day: 4
+            shard: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install media dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          python3 -m pip install 'yt-dlp==2026.11.23' faster-whisper argostranslate
+      - name: Transcribe, rank and edit cuts for content review
+        run: python3 scripts/scan_coringa_archive.py ${{ matrix.day }} ${{ matrix.shard }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coringa-dia-${{ matrix.day }}-parte-${{ matrix.shard }}
+          retention-days: 5
+          if-no-files-found: error
+          path: |
+            corpus/index.json
+            corpus/transcricao.json
+            corpus/corte-*/clip.mp4
+            corpus/corte-*/quadros.jpg
+            corpus/corte-*/manifest.json
+            corpus/corte-*/transcricao.json
