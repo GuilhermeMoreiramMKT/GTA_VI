@@ -167,7 +167,7 @@ async function publicationSlots(config: Config, channels: Destinations) {
 async function scheduleOne(config: Config, channels: Destinations) {
   const { slots, today } = await publicationSlots(config, channels);
   if (!slots.instagram || !slots.tiktok) return { scheduled: 0 };
-  const jobs = await database<Job[]>(config, "video_jobs?status=eq.rendered&score=gte." + editorial.fallbackMinScore + "&target_day=lte." + today + "&order=score.desc,created_at.asc&limit=4");
+  const jobs = await database<Job[]>(config, "video_jobs?status=eq.rendered&content_review=eq.approved&score=gte." + editorial.fallbackMinScore + "&target_day=lte." + today + "&order=score.desc,created_at.asc&limit=4");
   for (const job of jobs) {
     const fallback = job.score < editorial.minScore;
     if (fallback && platforms.every(platform => localDay(new Date(slots[platform]!)) !== today)) return { scheduled: 0, fallbackHeld: true };
@@ -328,7 +328,7 @@ export async function POST(request: Request) {
     }
     if (action === "readiness") {
       const state = await publicationReadiness(config);
-      const jobs = await database<{id:string}[]>(config,"video_jobs?status=eq.rendered&score=gte." + editorial.fallbackMinScore + "&select=id&limit=4");
+      const jobs = await database<{id:string}[]>(config,"video_jobs?status=eq.rendered&content_review=eq.approved&score=gte." + editorial.fallbackMinScore + "&select=id&limit=4");
       return NextResponse.json({ok:true,...state,readyJobs:jobs.length,dailyTarget:editorial.dailyPublicationTarget,instagram:true,tiktok:true});
     }
     if (action === "schedule") {
