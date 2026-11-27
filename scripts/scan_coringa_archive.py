@@ -6,6 +6,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import numpy as np
+
 from faster_whisper import WhisperModel
 from produce_candidate import flagged_text, produce
 
@@ -31,7 +33,8 @@ def rank(rows, offset, length):
         if start + 35 > length:
             continue
         window = []
-        for part in rows[index:]:
+        for part_index in range(index, len(rows)):
+            part = rows[part_index]
             if part["start"] >= start + 35:
                 break
             window.append(part["text"])
@@ -72,11 +75,12 @@ def main():
                "--download-sections", f"*{start}-{start + length}", "--merge-output-format", "mp4",
                "-o", str(media), url]
     subprocess.run(command, check=True)
-    audio = Path("archive-audio.opus")
+    audio = Path("archive-audio.pcm")
     subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(media), "-vn", "-ac", "1",
-                    "-c:a", "libopus", "-b:a", "24k", str(audio)], check=True)
+                    "-ar", "16000", "-f", "s16le", str(audio)], check=True)
     model = WhisperModel("base", device="cpu", compute_type="int8", cpu_threads=4)
-    segments, _ = model.transcribe(str(audio), language="pt", beam_size=1, vad_filter=True)
+    samples = np.fromfile(audio, dtype="<i2").astype(np.float32) / 32768.0
+    segments, _ = model.transcribe(samples, language="pt", beam_size=1, vad_filter=True)
     transcript = [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in segments]
     if not transcript:
         raise RuntimeError("No speech transcribed from archive segment")

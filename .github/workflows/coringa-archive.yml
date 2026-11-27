@@ -36,7 +36,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
-          python3 -m pip install 'yt-dlp==2026.11.23' faster-whisper argostranslate
+          python3 -m pip install 'yt-dlp==2026.11.23' 'faster-whisper==1.1.1' 'ctranslate2==4.6.0' 'sentencepiece==0.2.0' 'requests==2.32.5' 'huggingface-hub==0.29.3'
       - name: Transcribe, rank and edit cuts for content review
         run: python3 scripts/scan_coringa_archive.py ${{ matrix.day }} ${{ matrix.shard }}
       - uses: actions/upload-artifact@v4
