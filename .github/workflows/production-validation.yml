@@ -58,7 +58,7 @@ jobs:
           test "$code" = 200
           python3 - <<'PY'
           import json, os
-          from scripts.produce_candidate import EDITORIAL, declared_creator
+          from scripts.produce_candidate import EDITORIAL, declared_creator, flagged_text
           data = json.load(open("output/candidates.json"))
           state = json.load(open("output/queue.json"))
           kick = json.load(open("output/kick.json"))
@@ -67,7 +67,7 @@ jobs:
           data["providers"]["kick"] = kick["provider"]
           merged = {c["id"]: c for c in data["candidates"] + kick["candidates"]}
           assert all(declared_creator(c) for c in merged.values()), "Unexpected creator in focused discovery"
-          candidates = [c for c in merged.values() if c["id"] not in state["excluded"]]
+          candidates = [c for c in merged.values() if c["id"] not in state["excluded"] and not flagged_text(c.get("title"))]
           receipt = {"editorialFocus":EDITORIAL["focus"],"minScore":EDITORIAL["minScore"],"run":os.environ["GITHUB_RUN_ID"],"providers":data["providers"],"kick":kick["channels"],"qualified":sum(c["score"]>=EDITORIAL["minScore"] for c in merged.values()),"fallback":sum(c["score"]<EDITORIAL["minScore"] for c in candidates),"new":len(candidates),"remaining":state["remaining"]}
           with open("output/focus.json","w") as file:
               json.dump(receipt,file)
