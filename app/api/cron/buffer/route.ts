@@ -342,6 +342,51 @@ export async function POST(request: Request) {
     const config = configuration();
     const channels = await destinations(config);
     const action = new URL(request.url).searchParams.get("action");
+    if (action === "current-queue") {
+      const profiles: Record<string,unknown> = {};
+      for (const platform of platforms) {
+        const data = await bufferQuery<{channel:{displayName:string|null;externalLink:string|null}}>(
+          config, "query { channel(input:{id:" + JSON.stringify(channels[platform]) + "}) { displayName externalLink } }"
+        );
+        profiles[platform] = data.channel;
+      }
+      const now = new Date();
+      const days = [localDay(now), localDay(new Date(now.getTime() + 86400000))];
+      const start = new Date(days[0] + "T00:00:00-03:00").toISOString();
+      const end = new Date(days[1] + "T23:59:59.999-03:00").toISOString();
+      type QueueJob = Job & {
+        status:string; content_review:string;
+        instagram_due_at:string|null; tiktok_due_at:string|null;
+      };
+      const jobs = await database<QueueJob[]>(config,
+        "video_jobs?select=id,title,score,status,content_review,instagram_id,instagram_due_at,tiktok_id,tiktok_due_at" +
+        "&or=(and(instagram_due_at.gte." + encodeURIComponent(start) + ",instagram_due_at.lte." + encodeURIComponent(end) +
+        "),and(tiktok_due_at.gte." + encodeURIComponent(start) + ",tiktok_due_at.lte." + encodeURIComponent(end) + "))" +
+        "&order=instagram_due_at.asc,tiktok_due_at.asc"
+      );
+      const posts = [];
+      for (const job of jobs) {
+        const result: Record<string,unknown> = {id:job.id,title:job.title,score:job.score,jobStatus:job.status,contentReview:job.content_review};
+        for (const platform of platforms) {
+          const id = platform === "instagram" ? job.instagram_id : job.tiktok_id;
+          const reservedDueAt = platform === "instagram" ? job.instagram_due_at : job.tiktok_due_at;
+          if (!reservedDueAt) continue;
+          let remote: {status:string;dueAt:string|null} | null = null;
+          if (id) {
+            const data = await bufferQuery<{post:{status:string;dueAt:string|null}|null}>(
+              config, "query { post(input:{id:" + JSON.stringify(id) + "}) { status dueAt } }"
+            ).catch(() => ({post:null}));
+            remote = data.post;
+          }
+          result[platform] = {id,reservedDueAt,status:remote?.status ?? "unconfirmed",dueAt:remote?.dueAt ?? null};
+        }
+        posts.push(result);
+      }
+      const approved = await database<{id:string}[]>(config,
+        "video_jobs?status=eq.rendered&content_review=eq.approved&score=gte." + editorial.fallbackMinScore + "&select=id&limit=100"
+      );
+      return NextResponse.json({ok:true,checkedAt:new Date().toISOString(),timeZone:"America/Sao_Paulo",days,profiles,posts,approvedUnscheduled:approved.length});
+    }
     if (action === "batch-status") {
       const profiles: Record<string,unknown> = {};
       for (const platform of platforms) {
