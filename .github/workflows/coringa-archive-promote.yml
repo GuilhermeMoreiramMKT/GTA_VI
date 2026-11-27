@@ -1,0 +1,46 @@
+name: GTA Viral Radar - Promote reviewed Coringa cuts
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'config/coringa-archive-approved.json'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: coringa-archive-release
+  cancel-in-progress: false
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+      - name: Upload reviewed cuts to production storage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: python3 scripts/promote_coringa_archive.py
+  deliver:
+    needs: intake
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fill available slots in Buffer
+        env:
+          RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          case "$RADAR_BASE_URL" in https://gta-viral-radar.vercel.app|https://gta-viral-radar.vercel.app/) ;; *) exit 1;; esac
+          for index in 1 2 3 4 5 6; do
+            curl -fsS --max-time 65 -X POST --header "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/buffer?action=schedule" > /tmp/schedule.json
+            cat /tmp/schedule.json
+            if ! python3 -c 'import json,sys; sys.exit(json.load(open("/tmp/schedule.json")).get("scheduled")!=1)'; then break; fi
+          done

@@ -23,6 +23,24 @@ async function db(path: string, options: RequestInit = {}) {
   const text = await r.text();
   return text ? JSON.parse(text) : null;
 }
+
+const coringaReplays = new Set([
+  "01a1f4b1-55e8-7f55-b5c0-d46938964856",
+  "01a1f9ad-4a70-7e92-97dc-b9b84e4cd1b6",
+  "01a1ff2a-7518-7aa4-8938-f05218dd4293",
+  "01a20478-b7f0-73ea-b281-f0b1f5b462e9",
+]);
+
+function reviewedArchive(manifest: any) {
+  const candidate = manifest?.candidate;
+  if (manifest?.archiveReview !== true || candidate?.source !== "Kick" ||
+      candidate?.channelSlug !== "coringa" || !Number.isInteger(candidate.start) || candidate.start < 0) return false;
+  const url = new URL(candidate.url);
+  const match = /^\/coringa\/videos\/([0-9a-f-]+)$/.exec(url.pathname);
+  return url.origin === "https://kick.com" && !url.username && !url.password && !!match &&
+    coringaReplays.has(match[1]) && candidate.id === "kick-clip-coringa-vod-" + match[1] + "-" + candidate.start;
+}
+
 const day = () => new Intl.DateTimeFormat("sv-SE", {timeZone:"America/Sao_Paulo"}).format(new Date());
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function pathFor(job: any, asset: any) {
@@ -112,6 +130,9 @@ export async function POST(req: Request) {
           editorial.youtube.includes(c.creatorId));
 
       if (!authorized) return NextResponse.json({error:"Creator is outside the approved editorial channels"},{status:400});
+      if (m.archiveReview !== undefined && !reviewedArchive(m)) {
+        return NextResponse.json({error:"Invalid reviewed archive candidate"},{status:400});
+      }
       const claim = await db("rpc/reserve_rendered_candidate",{method:"POST",body:JSON.stringify({p_manifest:m,p_run:String(body.run),p_authorized:authorized})});
       if (claim.limit || claim.status !== "rendering") return NextResponse.json(claim);
       const {job,asset} = await jobAndAsset(claim.id);
@@ -135,7 +156,9 @@ export async function POST(req: Request) {
       const verified = !!asset.authorized;
       if (verified) await db("radar_assets?trend_id=eq."+encodeURIComponent(job.trend_id),{method:"PATCH",body:JSON.stringify({editorial_verified:true,notes:asset.notes+"; automatic format, duration and subtitle verification"})});
       const status=verified?"rendered":"review";
-      await db("video_jobs?id=eq."+job.id+"&status=eq.rendering",{method:"PATCH",body:JSON.stringify({status,video_url:verified?url+"/storage/v1/object/public/"+bucket+"/"+object:null,error:verified?null:"Private video prepared; publication rights not declared for this channel"})});
+      const approved = verified && reviewedArchive(JSON.parse(job.script || "{}"));
+
+      await db("video_jobs?id=eq."+job.id+"&status=eq.rendering",{method:"PATCH",body:JSON.stringify({status,...(approved ? {content_review:"approved"} : {}),video_url:verified?url+"/storage/v1/object/public/"+bucket+"/"+object:null,error:verified?null:"Private video prepared; publication rights not declared for this channel"})});
       return NextResponse.json({id:job.id,status,bytes:size});
     }
     return NextResponse.json({error:"Unknown action"},{status:400});
