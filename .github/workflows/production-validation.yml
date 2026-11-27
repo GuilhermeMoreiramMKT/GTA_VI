@@ -59,6 +59,9 @@ jobs:
           python3 - <<'PY'
           import json, os
           from scripts.produce_candidate import EDITORIAL, declared_creator, flagged_text
+          assert flagged_text("MEU DEUS O BAGOS") and flagged_text("GYATT OMG THAT CRAZY")
+          assert flagged_text("cena íntima") and flagged_text("sex scene")
+          assert not flagged_text("Fuga da base militar")
           data = json.load(open("output/candidates.json"))
           state = json.load(open("output/queue.json"))
           kick = json.load(open("output/kick.json"))
