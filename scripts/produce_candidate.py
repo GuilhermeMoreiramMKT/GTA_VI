@@ -245,6 +245,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 def produce(candidate, output):
     if flagged_text(candidate.get("title")):
         raise ValueError("Editorial content rejected by title")
+    output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     working = output / "working"
     working.mkdir(exist_ok=True)
