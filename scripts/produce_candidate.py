@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import textwrap
+import unicodedata
 import urllib.request
 from urllib.parse import urlparse
 import zipfile
@@ -41,6 +42,23 @@ def declared_creator(candidate):
     if platform == "YouTube":
         return source.hostname in {"youtube.com", "www.youtube.com", "youtu.be"} and candidate.get("creatorId") in EDITORIAL["youtube"]
     return False
+
+
+SEXUAL_CONTENT = re.compile(
+    r"\b(?:sexo|sexuais?|sexual(?:mente)?|sexualizad[oa]s?|porn\w*|nude[sz]?|nudity|naked|"
+    r"pelad[oa]s?|seminu[as]s?|strip(?:\s*club|tease|per)?|lap\s+dance|"
+    r"prostitu\w*|brothel|escort|swingers?|bordel|puteiro|"
+    r"cena(?:s)?\s+intima(?:s)?|suruba|orgi[ae]s?|transar|transando|"
+    r"bagos|gyatt|hentai|onlyfans|blowjob|oral\s+sex|breasts?|penis|vagina|"
+    r"genitais?|masturba\w*|seios?|testiculos?|orgasm\w*|gemid[oa]s?|"
+    r"boate\s+de\s+strip|sexual\s+assault)\b",
+    re.IGNORECASE,
+)
+
+def flagged_text(*parts):
+    normalized = " ".join(str(part or "") for part in parts)
+    normalized = unicodedata.normalize("NFKD", normalized)
+    return bool(SEXUAL_CONTENT.search("".join(char for char in normalized if not unicodedata.combining(char))))
 
 
 def choose(candidates, language):
@@ -224,6 +242,8 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 
 
 def produce(candidate, output):
+    if flagged_text(candidate.get("title")):
+        raise ValueError("Editorial content rejected by title")
     output.mkdir(parents=True, exist_ok=True)
     working = output / "working"
     working.mkdir(exist_ok=True)
@@ -233,6 +253,8 @@ def produce(candidate, output):
     if length < 30 or length > 45:
         raise RuntimeError("Downloaded interval has an invalid duration")
     rows, language, translator = transcribe(source, length, working)
+    if flagged_text(*(row.get(field) for row in rows for field in ("original", "text"))):
+        raise ValueError("Editorial content rejected by transcript")
     title = clean(candidate["title"])[:100]
     if title == title.upper():
         title = title.lower().capitalize()
