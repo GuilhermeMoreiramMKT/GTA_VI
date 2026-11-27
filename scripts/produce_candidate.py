@@ -45,8 +45,8 @@ def declared_creator(candidate):
 
 
 SEXUAL_CONTENT = re.compile(
-    r"\b(?:sexo|sexuais?|sexual(?:mente)?|sexualizad[oa]s?|porn\w*|nude[sz]?|nudity|naked|"
-    r"pelad[oa]s?|seminu[as]s?|strip(?:\s*club|tease|per)?|lap\s+dance|"
+    r"\b(?:sex|sexo|sexuais?|sexual(?:mente)?|sexualizad[oa]s?|porn\w*|nude[sz]?|nudity|naked|"
+    r"pelad[oa]s?|seminu[as]s?|strip(?:\s*club|tease|per|ping)?|lap\s+dance|"
     r"prostitu\w*|brothel|escort|swingers?|bordel|puteiro|"
     r"cena(?:s)?\s+intima(?:s)?|suruba|orgi[ae]s?|transar|transando|"
     r"bagos|gyatt|hentai|onlyfans|blowjob|oral\s+sex|breasts?|penis|vagina|"
