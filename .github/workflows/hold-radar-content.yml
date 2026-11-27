@@ -1,0 +1,62 @@
+name: Hold existing Radar clips for content review
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/hold-radar-content.yml'
+permissions: {}
+concurrency:
+  group: radar-buffer-delivery
+  cancel-in-progress: false
+jobs:
+  hold:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+    steps:
+      - name: Move still-scheduled Radar posts to drafts
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          ids = {
+            "wow": ["6b0827d965a5d32ef881a29b", "6b0827da4aca0afdbb9b3f6d"],
+            "base-militar": ["6b082794223c20bc651731ab", "6b0827951ee5febf3ede85b4"],
+            "bagos": ["6b08278e65a5d32ef8817e69", "6b08278f65a5d32ef8817f12"],
+            "xqc": ["6b078532b96dd8d351783fe5", "6b0785349f6dda31ccaf7485"],
+            "ishowspeed": ["6b0785279f6dda31ccaf700f", "6b0785289f6dda31ccaf706e"],
+            "tminnzy": ["6b07851c9f6dda31ccaf6bf1", "6b07851da791bea1b23f8f65"],
+          }
+          def gql(query):
+              req=urllib.request.Request("https://api.buffer.com",data=json.dumps({"query":query}).encode(),headers={"Authorization":"Bearer "+os.environ["BUFFER_API_KEY"],"Content-Type":"application/json"})
+              with urllib.request.urlopen(req,timeout=20) as response:
+                  return json.load(response)
+          failures=[]
+          for label, pair in ids.items():
+              for platform, post_id in zip(("instagram","tiktok"),pair):
+                  try:
+                      original=gql("query { post(input:{id:"+json.dumps(post_id)+"}) { id status } }")
+                      post=(original.get("data") or {}).get("post")
+                      if not post:
+                          failures.append((label,platform,"status unavailable"))
+                          continue
+                      if post["status"]=="sending":
+                          failures.append((label,platform,"already sending"))
+                          continue
+                      if post["status"] not in {"scheduled","needs_approval"}:
+                          print(label,platform,post["status"],flush=True)
+                          continue
+                      result=gql("mutation { editPost(input:{id:"+json.dumps(post_id)+",saveToDraft:true}) { ... on PostActionSuccess { post { id status } } ... on MutationError { message } } }")
+                      updated=((result.get("data") or {}).get("editPost") or {}).get("post")
+                      if updated and updated["id"]==post_id and updated["status"]=="draft":
+                          print(label,platform,"moved to draft",flush=True)
+                      else:
+                          failures.append((label,platform,"draft conversion unconfirmed"))
+                  except Exception as exc:
+                      failures.append((label,platform,type(exc).__name__))
+          for failure in failures:
+              print(*failure)
+          if failures:
+              raise SystemExit(1)
+          PY
