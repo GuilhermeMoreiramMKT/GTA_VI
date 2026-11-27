@@ -147,9 +147,18 @@ async function publicationSlots(config: Config, channels: Destinations) {
       const due = reservation[dueField];
       const id = reservation[idField];
       if (!due || (id && activeIds.has(id))) continue;
-      if (!id || !failedIds.has(id)) {
+      if (!id) {
         occupied.push(new Date(due));
         continue;
+      }
+      if (!failedIds.has(id)) {
+        // Some failed posts are omitted from the date-filtered queue.
+        const { post } = await bufferQuery<{ post: { status: string } | null }>(config,
+          "query { post(input: { id: " + JSON.stringify(id) + " }) { status } }").catch(() => ({ post: null }));
+        if (post?.status !== "error") {
+          occupied.push(new Date(due));
+          continue;
+        }
       }
       // Release only a confirmed failure and retain its provider ID for reconciliation.
       await database(config, jobPath(reservation.id) + "&" + idField + "=eq." + encodeURIComponent(id) +
