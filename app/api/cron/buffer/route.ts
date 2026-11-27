@@ -77,6 +77,8 @@ async function destinations(config: Config): Promise<Destinations> {
   return pairs[0];
 }
 
+class RejectedPost extends Error {}
+
 async function send(config: Config, channelId: string, platform: Platform, caption: string, videoUrl: string, draft: boolean, dueAt?: string): Promise<string> {
   const metadata = platform === "instagram" ? ", metadata: { instagram: { type: reel, shouldShareToFeed: true } }" : "";
   const scheduling = dueAt ? ", mode: customScheduled, dueAt: " + JSON.stringify(dueAt) : ", mode: addToQueue";
@@ -86,7 +88,8 @@ async function send(config: Config, channelId: string, platform: Platform, capti
     " }) { ... on PostActionSuccess { post { id } } ... on MutationError { message } } }";
   const response = await bufferQuery<{ createPost: { post?: { id?: string }; message?: string } }>(config, query);
   const id = response.createPost?.post?.id;
-  if (!id) throw new Error("Buffer rejected " + platform + " post" + (response.createPost?.message ? ": " + response.createPost.message.slice(0, 200) : ""));
+  if (!id && !response.createPost?.message) throw new Error("Unconfirmed Buffer response");
+  if (!id) throw new RejectedPost("Buffer rejected " + platform + " post" + (response.createPost?.message ? ": " + response.createPost.message.slice(0, 200) : ""));
   return id;
 }
 
@@ -101,8 +104,9 @@ function localDay(date = new Date()) {
   return ["year", "month", "day"].map(key => parts.find(part => part.type === key)?.value).join("-");
 }
 
-type ScheduledPost = { id: string; channelId: string; dueAt: string | null };
+type ScheduledPost = { id: string; channelId: string; dueAt: string | null; status: string };
 type Reservation = {
+  id: string;
   instagram_id: string | null;
   instagram_due_at: string | null;
   tiktok_id: string | null;
@@ -120,25 +124,38 @@ async function publicationSlots(config: Config, channels: Destinations) {
     const after: string = cursor ? ", after: " + JSON.stringify(cursor) : "";
     const query = "query { posts(first: 50" + after + ", input: { organizationId: " + JSON.stringify(channels.organizationId) +
       ", filter: { channelIds: " + JSON.stringify(platforms.map(platform => channels[platform])) +
-      ", status: [scheduled, sending, sent], dueAt: { start: " + JSON.stringify(start) + ", end: " + JSON.stringify(end) +
-      " } } }) { edges { node { id channelId dueAt } } pageInfo { hasNextPage endCursor } } }";
+      ", status: [scheduled, sending, sent, error], dueAt: { start: " + JSON.stringify(start) + ", end: " + JSON.stringify(end) +
+      " } } }) { edges { node { id channelId dueAt status } } pageInfo { hasNextPage endCursor } } }";
     const { posts: page } = await bufferQuery<{posts:{edges:{node:ScheduledPost}[];pageInfo:{hasNextPage:boolean;endCursor:string|null}}}>(config, query);
     posts.push(...page.edges.map(edge => edge.node));
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (cursor);
 
-  const reservations = await database<Reservation[]>(config, "video_jobs?select=instagram_id,instagram_due_at,tiktok_id,tiktok_due_at" +
+  const reservations = await database<Reservation[]>(config, "video_jobs?select=id,instagram_id,instagram_due_at,tiktok_id,tiktok_due_at" +
     "&or=(and(instagram_due_at.gte." + encodeURIComponent(start) + ",instagram_due_at.lte." + encodeURIComponent(end) +
     "),and(tiktok_due_at.gte." + encodeURIComponent(start) + ",tiktok_due_at.lte." + encodeURIComponent(end) + "))");
   const slots = {} as Record<Platform, string | undefined>;
   for (const platform of platforms) {
     const remote = posts.filter(post => post.channelId === channels[platform] && post.dueAt);
-    const occupied = remote.map(post => new Date(post.dueAt!));
-    const remoteIds = new Set(remote.map(post => post.id));
+    const active = remote.filter(post => post.status !== "error");
+    const occupied = active.map(post => new Date(post.dueAt!));
+    const activeIds = new Set(active.map(post => post.id));
+    const failedIds = new Set(remote.filter(post => post.status === "error").map(post => post.id));
+    const dueField = platform === "instagram" ? "instagram_due_at" : "tiktok_due_at";
+    const idField = platform === "instagram" ? "instagram_id" : "tiktok_id";
     for (const reservation of reservations) {
-      const due = reservation[`${platform}_due_at`];
-      const id = reservation[`${platform}_id`];
-      if (due && (!id || !remoteIds.has(id))) occupied.push(new Date(due));
+      const due = reservation[dueField];
+      const id = reservation[idField];
+      if (!due || (id && activeIds.has(id))) continue;
+      if (!id || !failedIds.has(id)) {
+        occupied.push(new Date(due));
+        continue;
+      }
+      // Release only a confirmed failure and retain its provider ID for reconciliation.
+      await database(config, jobPath(reservation.id) + "&" + idField + "=eq." + encodeURIComponent(id) +
+        "&" + dueField + "=eq." + encodeURIComponent(due), {
+        method: "PATCH", body: JSON.stringify({ [dueField]: null }),
+      });
     }
     for (const day of days) {
       const sameDay = occupied.filter(due => localDay(due) === day);
@@ -166,11 +183,10 @@ async function publicationSlots(config: Config, channels: Destinations) {
 
 async function scheduleOne(config: Config, channels: Destinations) {
   const { slots, today } = await publicationSlots(config, channels);
-  if (!slots.instagram || !slots.tiktok) return { scheduled: 0 };
+  if (!slots.instagram && !slots.tiktok) return { scheduled: 0 };
   const jobs = await database<Job[]>(config, "video_jobs?status=eq.rendered&content_review=eq.approved&score=gte." + editorial.fallbackMinScore + "&target_day=lte." + today + "&order=score.desc,created_at.asc&limit=4");
   for (const job of jobs) {
     const fallback = job.score < editorial.minScore;
-    if (fallback && platforms.every(platform => localDay(new Date(slots[platform]!)) !== today)) return { scheduled: 0, fallbackHeld: true };
     const assets = await database<Asset[]>(config, "radar_assets?trend_id=eq." + encodeURIComponent(job.trend_id) + "&limit=1");
     const asset = assets[0];
     const prefix = config.url + "/storage/v1/object/public/" + bucket + "/";
@@ -179,24 +195,37 @@ async function scheduleOne(config: Config, channels: Destinations) {
       continue;
     }
     const claimed = await database<Job[]>(config, "rpc/claim_radar_daily_delivery", {
-      method: "POST", body: JSON.stringify({ p_id: job.id, p_instagram_due: slots.instagram, p_tiktok_due: slots.tiktok }),
+      method: "POST", body: JSON.stringify({ p_id: job.id, p_instagram_due: slots.instagram ?? null, p_tiktok_due: slots.tiktok ?? null }),
     });
     if (!claimed.length) continue;
-    try {
-      for (const platform of platforms) {
-        const field = platform === "instagram" ? "instagram_id" : "tiktok_id";
-        if (claimed[0][field]) continue;
-        const id = await send(config, channels[platform], platform, job.caption, job.video_url, false, slots[platform]);
-        await patchJob(config, job.id, { [field]: id });
+    let sent = 0;
+    let rejected = 0;
+    for (const platform of platforms) {
+      const due = slots[platform];
+      if (!due) continue;
+      const idField = platform === "instagram" ? "instagram_id" : "tiktok_id";
+      const dueField = platform === "instagram" ? "instagram_due_at" : "tiktok_due_at";
+      try {
+        const id = await send(config, channels[platform], platform, job.caption, job.video_url, false, due);
+        await patchJob(config, job.id, { [idField]: id });
+        sent++;
+      } catch (error) {
+        if (error instanceof RejectedPost) {
+          await patchJob(config, job.id, { [dueField]: null, error: error.message });
+          rejected++;
+          continue;
+        }
+        // An unconfirmed remote response can still have created a post.
+        await patchJob(config, job.id, {
+          status: "review",
+          error: "Buffer scheduling needs reconciliation",
+          ...(platform === "instagram" && slots.tiktok ? { tiktok_due_at: null } : {}),
+        });
+        return { scheduled: sent ? 1 : 0, review: true };
       }
-      await patchJob(config, job.id, { status: "scheduled" });
-      return { scheduled: 1, score: job.score, fallback, dueAt: slots };
-    } catch (error) {
-      // An ambiguous remote result must never be retried automatically.
-      const detail = error instanceof Error ? error.message : "Unconfirmed provider result";
-      await patchJob(config, job.id, { status: "review", error: "Buffer scheduling needs reconciliation: " + detail });
-      return { scheduled: 0, review: true };
     }
+    await patchJob(config, job.id, { status: sent ? "scheduled" : "blocked" });
+    if (sent) return { scheduled: 1, score: job.score, fallback, dueAt: slots, rejected };
   }
   return { scheduled: 0 };
 }

@@ -12,7 +12,7 @@ on:
     paths:
       - '.github/workflows/buffer-delivery.yml'
   schedule:
-    - cron: '23 * * * *'
+    - cron: '8,23,38,53 * * * *'
 permissions: {}
 concurrency:
   group: radar-buffer-delivery
@@ -80,7 +80,7 @@ jobs:
             sleep 10
           done
           test "$available" = true
-          for index in 1 2 3; do
+          for index in 1 2 3 4 5 6; do
             curl --fail-with-body --show-error --silent --max-time 65 -X POST --header "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/buffer?action=schedule" > /tmp/daily-delivery.json
             cat /tmp/daily-delivery.json
             if ! python3 -c 'import json,sys; data=json.load(open("/tmp/daily-delivery.json")); sys.exit(0 if data.get("scheduled")==1 else 1)'; then break; fi
