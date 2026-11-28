@@ -5,6 +5,7 @@ const videoId = /^[\w-]{11}$/;
 const channelId = /^UC[\w-]{22}$/;
 const gta = /\b(?:gta|grand theft auto)\s*(?:vi|6)\b/i;
 const day = 86400000;
+const namedCreator = /\b(?:coringa|alanzoka|paulinho\s*(?:o\s*)?loko(?:br)?|bistecone|gabe\s*peixe)\b/i;
 
 type Item = {
   id: string;
@@ -53,6 +54,7 @@ export async function discoverClipChannels(fetchData: (url: string) => Promise<a
     const age = now - Date.parse(item.snippet.publishedAt);
     return channelId.test(item.snippet.channelId) && !editorial.youtube.includes(item.snippet.channelId) &&
       age >= 0 && age <= 7 * day && gta.test(item.snippet.title + " " + item.snippet.description) &&
+      namedCreator.test(item.snippet.title + " " + item.snippet.description) &&
       Number(item.statistics?.viewCount) > 0;
   }).map(item => {
     const views = Number(item.statistics?.viewCount);
@@ -84,6 +86,7 @@ export async function discoverClipChannels(fetchData: (url: string) => Promise<a
   const candidates = [];
   const accepted: { id: string; start: number }[] = [];
   let unresolved = 0;
+  const unresolvedSignals = [];
   for (const signal of signals) {
     const matches = signal.references.filter(ref => {
       const live = archives.get(ref.id)?.liveStreamingDetails;
@@ -93,6 +96,11 @@ export async function discoverClipChannels(fetchData: (url: string) => Promise<a
     });
     if (matches.length !== 1) {
       unresolved++;
+      if (unresolvedSignals.length < 20) {
+        unresolvedSignals.push({ id: signal.item.id, title: signal.item.snippet.title,
+          channel: signal.item.snippet.channelTitle, engagementPerHour: Math.round(signal.engagement),
+          reason: matches.length > 1 ? "ambiguous-original" : "original-or-offset-unverified" });
+      }
       continue;
     }
     const [{ id, start }] = matches;
@@ -109,5 +117,5 @@ export async function discoverClipChannels(fetchData: (url: string) => Promise<a
       referenceClip: { id: signal.item.id, channelId: signal.item.snippet.channelId, views: signal.views, likes: signal.likes, comments: signal.comments },
     });
   }
-  return { channels, candidates: candidates.slice(0, 10), unresolved };
+  return { channels, candidates: candidates.slice(0, 10), unresolved, unresolvedSignals };
 }
