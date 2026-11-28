@@ -1,18 +1,33 @@
-name: Match viral clips against official live transcripts
+name: GTA VI - Mineirador, Transcritor e Clipador
 on:
   workflow_dispatch:
+    inputs:
+      source_run:
+        description: Optional run containing authorized clip-agent-input artifact
+        type: string
+      archive_run:
+        description: Optional Coringa archive run with timecoded transcripts
+        type: string
+  workflow_run:
+    workflows: ["GTA Viral Radar - automated production validation"]
+    branches: [main]
+    types: [completed]
   push:
     branches: [main]
     paths:
       - '.github/workflows/clip-transcript-match.yml'
-      - 'scripts/match_live_transcripts.py'
+      - 'scripts/clip_agents.py'
 permissions:
   contents: read
   actions: read
+concurrency:
+  group: gta-clip-agents
+  cancel-in-progress: false
 jobs:
-  match:
+  pipeline:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,63 +35,71 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Consolidate timecoded transcripts
+      - name: Mineirador - receber métricas e gerar links
         env:
           GH_TOKEN: ${{ github.token }}
+          DISCOVERY_RUN: ${{ github.event.workflow_run.id }}
+          SOURCE_RUN: ${{ inputs.source_run }}
+        id: mine
         run: |
-          mkdir -p inputs output
-          gh run download 46001609077 --pattern 'coringa-dia-*' --dir inputs
-          for block in inputs/coringa-dia-*/; do
-            name=$(basename "$block")
-            (cd "$block" && zip -q "../$name.zip" index.json transcricao.json)
-          done
-          python scripts/match_live_transcripts.py --build inputs/*.zip --corpus output/GTA-VI-transcricoes-das-lives.json
-          gh run download 46140786348 --name radar-clip-channel-mapping --dir inputs/mapping
-      - name: Transcribe real clips and look for the original scene
+          set -euo pipefail
+          mkdir -p output inputs/media
+          if [ -n "$SOURCE_RUN" ]; then
+            [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
+            gh run download "$SOURCE_RUN" --name clip-agent-input --dir inputs/media
+            input=inputs/media/metrics.json
+          elif [ -n "$DISCOVERY_RUN" ]; then
+            if ! gh run download "$DISCOVERY_RUN" --name radar-clip-channel-mapping --dir inputs; then exit 0; fi
+            input=inputs/clip-channels.json
+            if ! jq -e 'has("metricSignals")' "$input" >/dev/null; then exit 0; fi
+          else
+            printf '[]\n' > inputs/metrics.json
+            input=inputs/metrics.json
+          fi
+          python scripts/clip_agents.py mine --input "$input" --output output/mineirador.json
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - name: Transcritor - extrair áudio e metadados
+        if: steps.mine.outputs.ready == 'true'
         run: |
-          python -m pip install -q 'yt-dlp==2026.11.23' 'faster-whisper==1.1.1' 'requests==2.32.5' 'huggingface-hub==0.29.3' 'ctranslate2==4.6.0'
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          import re
-          import subprocess
-          import numpy as np
-          from faster_whisper import WhisperModel
-          from scripts.match_live_transcripts import match
-
-          report = json.loads(Path("inputs/mapping/clip-channels.json").read_text())
-          corpus = json.loads(Path("output/GTA-VI-transcricoes-das-lives.json").read_text())
-          leads = [row for row in report["unresolvedSignals"]
-                   if re.fullmatch(r"[A-Za-z0-9_-]{11}", row["id"]) and re.search("coringa", row["title"], re.I)]
-          results = []
-          model = None
-          for lead in leads[:4]:
-              video = lead["id"]
-              item = {"id": video, "status": "source_audio_unavailable"}
-              results.append(item)
-              try:
-                  subprocess.run(["python", "-m", "yt_dlp", "--ignore-config", "--no-playlist",
-                                  "--max-downloads", "1", "--match-filter", "duration <= 90",
-                                  "--no-progress", "--socket-timeout", "12", "--retries", "0", "-f",
-                                  "bestaudio", "-o", f"inputs/{video}.%(ext)s",
-                                  f"https://www.youtube.com/watch?v={video}"], check=True, timeout=45)
-                  path = next(f for f in Path("inputs").glob(f"{video}.*") if f.suffix != ".part")
-                  raw = subprocess.check_output(["ffmpeg", "-v", "error", "-i", str(path), "-t", "90",
-                                                 "-vn", "-ac", "1", "-ar", "16000", "-f", "s16le", "-"])
-              except (subprocess.SubprocessError, StopIteration):
-                  continue
-              if model is None:
-                  model = WhisperModel("small", device="cpu", compute_type="int8")
-              audio = np.frombuffer(raw, dtype="<i2").astype(np.float32)/32768
-              segments, _ = model.transcribe(audio, language="pt", vad_filter=True)
-              rows = [{"start": part.start, "end": part.end, "text": part.text.strip()} for part in segments]
-              item.update(match(corpus, rows))
-          Path("output/result.json").write_text(json.dumps(results, ensure_ascii=False, indent=2))
-          print(json.dumps(results, ensure_ascii=False))
-          PY
+          mkdir -p output/transcripts
+          if ! find inputs/media -maxdepth 1 -type f ! -name '*.json' -print -quit | grep -q .; then
+            jq '[.[] | {key:(.platform + "-" + .id),status:"authorized_media_missing_or_ambiguous"}]' output/mineirador.json > output/transcritor.json
+            exit 0
+          fi
+          if ! command -v ffmpeg >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y ffmpeg; fi
+          python -m pip install -q 'yt-dlp==2026.11.23' 'faster-whisper==1.1.1' 'requests==2.32.5' 'huggingface-hub==0.29.3' 'ctranslate2==4.6.0' 'sentencepiece==0.2.0'
+          python scripts/clip_agents.py transcribe --input output/mineirador.json --media inputs/media --output output/transcritor.json
+      - name: Clipador - localizar e editar trecho do replay
+        if: steps.mine.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHIVE_RUN: ${{ inputs.archive_run }}
+        run: |
+          set -euo pipefail
+          printf '[]\n' > output/clipador.json
+          if ! find output/transcripts -name '*.json' -print -quit | grep -q .; then exit 0; fi
+          if [ -f inputs/media/corpus.json ]; then
+            cp inputs/media/corpus.json inputs/corpus.json
+          else
+            run="${ARCHIVE_RUN:-46001609077}"
+            [[ "$run" =~ ^[0-9]+$ ]]
+            gh run download "$run" --pattern 'coringa-dia-*' --dir inputs
+            for block in inputs/coringa-dia-*/; do
+              name=$(basename "$block")
+              (cd "$block" && zip -q "../$name.zip" index.json transcricao.json)
+            done
+            python scripts/match_live_transcripts.py --corpus inputs/corpus.json --build inputs/*.zip
+          fi
+          python scripts/clip_agents.py locate --input output/transcripts --corpus inputs/corpus.json --output output/clipador.json
+          python scripts/clip_agents.py render --input output/clipador.json --output output/clipador.json
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: steps.mine.outputs.ready == 'true'
         with:
-          name: clip-transcript-match
-          path: output/
-          retention-days: 14
+          name: radar-agents
+          path: |
+            output/*.json
+            output/transcripts/*.json
+            output/corte-*/clip.mp4
+            output/corte-*/manifest.json
+            output/corte-*/transcricao.json
+          retention-days: 5

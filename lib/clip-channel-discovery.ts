@@ -48,7 +48,7 @@ export async function discoverClipChannels(fetchData: (url: string) => Promise<a
   if (searches.every(result => result.status === "rejected")) throw new Error("Clip channel searches unavailable");
   const ids = [...new Set<string>(searches.flatMap(result => result.status === "fulfilled"
     ? (result.value.items || []).map((item: any) => item.id?.videoId) : []).filter(id => videoId.test(id || "")))];
-  if (!ids.length) return { channels: [], candidates: [], unresolved: 0 };
+  if (!ids.length) return { channels: [], candidates: [], unresolved: 0, metricSignals: [] };
   const response = await api("videos", { part: "snippet,statistics", id: ids.join(",") });
   const signals = ((response.items || []) as Item[]).filter(item => {
     const age = now - Date.parse(item.snippet.publishedAt);
@@ -64,7 +64,7 @@ export async function discoverClipChannels(fetchData: (url: string) => Promise<a
     const engagement = (views + 4 * likes + 8 * comments) / ageHours;
     return { item, views, likes, comments, engagement, references: originalOffsets(item.snippet.description) };
   }).sort((a, b) => b.engagement - a.engagement);
-  if (!signals.length) return { channels: [], candidates: [], unresolved: 0 };
+  if (!signals.length) return { channels: [], candidates: [], unresolved: 0, metricSignals: [] };
 
   const channelIds = [...new Set(signals.map(signal => signal.item.snippet.channelId))];
   const originalIds = [...new Set(signals.flatMap(signal => signal.references.map(ref => ref.id)))].slice(0, 50);
@@ -117,5 +117,11 @@ export async function discoverClipChannels(fetchData: (url: string) => Promise<a
       referenceClip: { id: signal.item.id, channelId: signal.item.snippet.channelId, views: signal.views, likes: signal.likes, comments: signal.comments },
     });
   }
-  return { channels, candidates: candidates.slice(0, 10), unresolved, unresolvedSignals };
+  const metricSignals = signals.map(({ item }) => ({
+    url: "https://www.youtube.com/watch?v=" + item.id, publishedAt: item.snippet.publishedAt,
+    channel: item.snippet.channelTitle, title: item.snippet.title,
+    views: item.statistics?.viewCount == null ? null : Number(item.statistics.viewCount),
+    likes: item.statistics?.likeCount == null ? null : Number(item.statistics.likeCount), shares: null,
+  }));
+  return { channels, metricSignals, candidates: candidates.slice(0, 10), unresolved, unresolvedSignals };
 }
