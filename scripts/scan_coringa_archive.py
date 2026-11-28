@@ -60,6 +60,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("day", type=int, choices=ARCHIVE)
     parser.add_argument("shard", type=int, choices=range(5))
+    parser.add_argument("--reuse", type=Path)
     args = parser.parse_args()
     video, day, duration = ARCHIVE[args.day]
     start = args.shard * CHUNK
@@ -69,35 +70,45 @@ def main():
     url = "https://kick.com/coringa/videos/" + video
     output = Path("corpus")
     output.mkdir(exist_ok=True)
-    media = Path("archive-source.mp4")
-    command = ["python3", "-m", "yt_dlp", "--ignore-config", "--no-playlist", "--no-progress",
-               "--quiet", "--socket-timeout", "25", "--retries", "2", "-f", "worst",
-               "--download-sections", f"*{start}-{start + length}", "--merge-output-format", "mp4",
-               "-o", str(media), url]
-    subprocess.run(command, check=True)
-    audio = Path("archive-audio.pcm")
-    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(media), "-vn", "-ac", "1",
-                    "-ar", "16000", "-f", "s16le", str(audio)], check=True)
-    model = WhisperModel("base", device="cpu", compute_type="int8", cpu_threads=4)
-    samples = np.fromfile(audio, dtype="<i2").astype(np.float32) / 32768.0
-    segments, _ = model.transcribe(samples, language="pt", beam_size=1, vad_filter=True)
-    transcript = [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in segments]
-    if not transcript:
-        raise RuntimeError("No speech transcribed from archive segment")
-    options = rank(transcript, start, length)
-    if args.shard:
-        options = [item for item in options if item[1] >= start + 20]
-    options = [item for item in options if item[1] < start + CHUNK + 20]
-    (output / "index.json").write_text(json.dumps({
-        "day": args.day, "url": url, "offset": start, "seconds": length,
-        "candidates": [{"score": s, "start": t, "duration": 35, "category": c, "excerpt": x}
-                       for s, t, c, x in options],
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-    clean = [{"start": row["start"] + start, "end": row["end"] + start, "text": row["text"]}
-             for row in transcript]
-    (output / "transcricao.json").write_text(json.dumps(clean, ensure_ascii=False), encoding="utf-8")
-    media.unlink()
-    audio.unlink()
+    if args.reuse is not None:
+        index_path = args.reuse / "index.json"
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        if (index["day"], index["url"], index["offset"], index["seconds"]) != (args.day, url, start, length):
+            raise ValueError("Saved transcript does not match the requested replay block")
+        options = [(row["score"], row["start"], row["category"], row["excerpt"])
+                   for row in index["candidates"] if start <= row["start"] <= start + length - 35]
+        for name in ("index.json", "transcricao.json"):
+            (output / name).write_bytes((args.reuse / name).read_bytes())
+    else:
+        media = Path("archive-source.mp4")
+        command = ["python3", "-m", "yt_dlp", "--ignore-config", "--no-playlist", "--no-progress",
+                   "--quiet", "--socket-timeout", "25", "--retries", "2", "-f", "worst",
+                   "--download-sections", f"*{start}-{start + length}", "--merge-output-format", "mp4",
+                   "-o", str(media), url]
+        subprocess.run(command, check=True)
+        audio = Path("archive-audio.pcm")
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(media), "-vn", "-ac", "1",
+                        "-ar", "16000", "-f", "s16le", str(audio)], check=True)
+        model = WhisperModel("base", device="cpu", compute_type="int8", cpu_threads=4)
+        samples = np.fromfile(audio, dtype="<i2").astype(np.float32) / 32768.0
+        segments, _ = model.transcribe(samples, language="pt", beam_size=1, vad_filter=True)
+        transcript = [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in segments]
+        if not transcript:
+            raise RuntimeError("No speech transcribed from archive segment")
+        options = rank(transcript, start, length)
+        if args.shard:
+            options = [item for item in options if item[1] >= start + 20]
+        options = [item for item in options if item[1] < start + CHUNK + 20]
+        (output / "index.json").write_text(json.dumps({
+            "day": args.day, "url": url, "offset": start, "seconds": length,
+            "candidates": [{"score": s, "start": t, "duration": 35, "category": c, "excerpt": x}
+                           for s, t, c, x in options],
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        clean = [{"start": row["start"] + start, "end": row["end"] + start, "text": row["text"]}
+                 for row in transcript]
+        (output / "transcricao.json").write_text(json.dumps(clean, ensure_ascii=False), encoding="utf-8")
+        media.unlink()
+        audio.unlink()
     for score, time, category, excerpt in options[:4]:
         candidate = {
             "id": f"kick-clip-coringa-vod-{video}-{time}",
