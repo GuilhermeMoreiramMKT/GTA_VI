@@ -1,0 +1,82 @@
+name: Match viral clips against official live transcripts
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/clip-transcript-match.yml'
+      - 'scripts/match_live_transcripts.py'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  match:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Consolidate timecoded transcripts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p inputs output
+          gh run download 46001609077 --pattern 'coringa-dia-*' --dir inputs
+          for block in inputs/coringa-dia-*/; do
+            name=$(basename "$block")
+            (cd "$block" && zip -q "../$name.zip" index.json transcricao.json)
+          done
+          python scripts/match_live_transcripts.py --build inputs/*.zip --corpus output/GTA-VI-transcricoes-das-lives.json
+          gh run download 46140786348 --name radar-clip-channel-mapping --dir inputs/mapping
+      - name: Transcribe real clips and look for the original scene
+        run: |
+          python -m pip install -q 'yt-dlp==2026.11.23' 'faster-whisper==1.1.1'
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import subprocess
+          import numpy as np
+          from faster_whisper import WhisperModel
+          from scripts.match_live_transcripts import match
+
+          report = json.loads(Path("inputs/mapping/clip-channels.json").read_text())
+          corpus = json.loads(Path("output/GTA-VI-transcricoes-das-lives.json").read_text())
+          leads = [row for row in report["unresolvedSignals"]
+                   if re.fullmatch(r"[A-Za-z0-9_-]{11}", row["id"]) and re.search("coringa", row["title"], re.I)]
+          results = []
+          model = None
+          for lead in leads[:4]:
+              video = lead["id"]
+              item = {"id": video, "status": "source_audio_unavailable"}
+              results.append(item)
+              try:
+                  subprocess.run(["python", "-m", "yt_dlp", "--ignore-config", "--no-playlist",
+                                  "--max-downloads", "1", "--match-filter", "duration <= 90",
+                                  "--no-progress", "--socket-timeout", "12", "--retries", "0", "-f",
+                                  "bestaudio", "-o", f"inputs/{video}.%(ext)s",
+                                  f"https://www.youtube.com/watch?v={video}"], check=True, timeout=45)
+                  path = next(f for f in Path("inputs").glob(f"{video}.*") if f.suffix != ".part")
+                  raw = subprocess.check_output(["ffmpeg", "-v", "error", "-i", str(path), "-t", "90",
+                                                 "-vn", "-ac", "1", "-ar", "16000", "-f", "s16le", "-"])
+              except (subprocess.SubprocessError, StopIteration):
+                  continue
+              if model is None:
+                  model = WhisperModel("small", device="cpu", compute_type="int8")
+              audio = np.frombuffer(raw, dtype="<i2").astype(np.float32)/32768
+              segments, _ = model.transcribe(audio, language="pt", vad_filter=True)
+              rows = [{"start": part.start, "end": part.end, "text": part.text.strip()} for part in segments]
+              item.update(match(corpus, rows))
+          Path("output/result.json").write_text(json.dumps(results, ensure_ascii=False, indent=2))
+          print(json.dumps(results, ensure_ascii=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clip-transcript-match
+          path: output/
+          retention-days: 14
