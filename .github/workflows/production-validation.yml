@@ -2,13 +2,15 @@ name: GTA Viral Radar - automated production validation
 on:
   workflow_dispatch:
   schedule:
-    - cron: '13 * * * *'
+    - cron: '13 1-5,7-11,13-17,19-23 * * *'
+    - cron: '13 0,6,12,18 * * *'
   push:
     branches: [main]
     paths:
       - '.github/workflows/production-validation.yml'
       - 'scripts/produce_candidate.py'
       - 'scripts/discover_kick.py'
+      - 'lib/clip-channel-discovery.ts'
       - 'config/editorial.json'
       - 'app/api/cron/production-intake/route.ts'
       - 'app/api/cron/clip-candidates/route.ts'
@@ -33,6 +35,31 @@ jobs:
         run: |
           mkdir -p output
           /tmp/radar-venv/bin/python scripts/discover_kick.py --output output/kick.json
+      - name: Map YouTube clip channels and locate original streams
+        if: github.event_name != 'schedule' || github.event.schedule == '13 0,6,12,18 * * *'
+        env:
+          RADAR_BASE_URL: ${{ secrets.RADAR_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          case "$RADAR_BASE_URL" in https://gta-viral-radar.vercel.app|https://gta-viral-radar.vercel.app/) ;; *) exit 1;; esac
+          for attempt in {1..6}; do
+            code=$(curl -sS --max-time 40 -o output/clip-channels.tmp -w '%{http_code}' -H "Authorization: Bearer $CRON_SECRET" "${RADAR_BASE_URL%/}/api/cron/clip-candidates?action=clip-channels" || true)
+            if [ "$code" = 200 ] && python3 -c 'import json; assert "channels" in json.load(open("output/clip-channels.tmp"))'; then
+              mv output/clip-channels.tmp output/clip-channels.json
+              exit 0
+            fi
+            if [ "$code" != 200 ] && [ "$code" != 400 ] && [ "$code" != 404 ]; then break; fi
+            sleep 12
+          done
+          echo "::warning::Clip channel discovery unavailable (HTTP $code); continuing with existing sources"
+      - name: Save clip channel mapping
+        if: hashFiles('output/clip-channels.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: radar-clip-channel-mapping
+          path: output/clip-channels.json
+          retention-days: 5
       - name: Discover completed-stream candidates
         id: discover
         env:
@@ -68,7 +95,10 @@ jobs:
           assert data.get("editorialFocus") == EDITORIAL["focus"] and data.get("minScore") == EDITORIAL["minScore"] and data.get("fallbackMinScore") == EDITORIAL["fallbackMinScore"]
           assert {channel["channel"] for channel in kick["channels"]} == set(EDITORIAL["kick"])
           data["providers"]["kick"] = kick["provider"]
-          merged = {c["id"]: c for c in data["candidates"] + kick["candidates"]}
+          from pathlib import Path
+          report = Path("output/clip-channels.json")
+          signals = json.loads(report.read_text())["candidates"] if report.is_file() else []
+          merged = {c["id"]: c for c in data["candidates"] + kick["candidates"] + signals}
           assert all(declared_creator(c) for c in merged.values()), "Unexpected creator in focused discovery"
           candidates = [c for c in merged.values() if c["id"] not in state["excluded"] and not flagged_text(c.get("title"))]
           receipt = {"editorialFocus":EDITORIAL["focus"],"minScore":EDITORIAL["minScore"],"run":os.environ["GITHUB_RUN_ID"],"providers":data["providers"],"kick":kick["channels"],"qualified":sum(c["score"]>=EDITORIAL["minScore"] for c in merged.values()),"fallback":sum(c["score"]<EDITORIAL["minScore"] for c in candidates),"new":len(candidates),"remaining":state["remaining"]}

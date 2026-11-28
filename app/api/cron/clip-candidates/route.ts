@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import editorial from "../../../../config/editorial.json";
+import { discoverClipChannels } from "../../../../lib/clip-channel-discovery";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 45;
@@ -124,6 +125,13 @@ async function youtubeCandidates(): Promise<Candidate[]> {
 
 export async function GET(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (new URL(request.url).searchParams.get("action") === "clip-channels") {
+    try {
+      return NextResponse.json(await discoverClipChannels(requestJson));
+    } catch {
+      return NextResponse.json({ error: "Clip channel discovery unavailable" }, { status: 502 });
+    }
+  }
   const results = await Promise.allSettled([twitchCandidates(), youtubeCandidates()]);
   const candidates = results.flatMap(result => result.status === "fulfilled" ? result.value : []).filter(item => item.score >= editorial.fallbackMinScore).sort((a, b) => b.score - a.score).slice(0, 20);
   return NextResponse.json({ candidates, editorialFocus: editorial.focus, minScore: editorial.minScore, fallbackMinScore: editorial.fallbackMinScore, providers: { twitch: results[0].status, youtube: results[1].status }, scoreType: "heuristic engagement evidence, not guaranteed future performance" });
