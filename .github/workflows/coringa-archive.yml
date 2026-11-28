@@ -48,15 +48,19 @@ jobs:
               python3 scripts/scan_coringa_archive.py ${{ matrix.day }} ${{ matrix.shard }}
               ;;
             *)
-              gh run download 46001609077 --name 'coringa-dia-${{ matrix.day }}-parte-${{ matrix.shard }}' --dir saved
-              python3 scripts/scan_coringa_archive.py ${{ matrix.day }} ${{ matrix.shard }} --reuse saved
+              if gh run download 46001609077 --name 'coringa-dia-${{ matrix.day }}-parte-${{ matrix.shard }}' --dir saved; then
+                python3 scripts/scan_coringa_archive.py ${{ matrix.day }} ${{ matrix.shard }} --reuse saved
+              else
+                python3 scripts/scan_coringa_archive.py ${{ matrix.day }} ${{ matrix.shard }}
+              fi
               ;;
           esac
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: coringa-dia-${{ matrix.day }}-parte-${{ matrix.shard }}
           retention-days: 5
-          if-no-files-found: error
+          if-no-files-found: warn
           path: |
             corpus/index.json
             corpus/transcricao.json

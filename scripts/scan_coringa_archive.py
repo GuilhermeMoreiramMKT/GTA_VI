@@ -109,7 +109,10 @@ def main():
         (output / "transcricao.json").write_text(json.dumps(clean, ensure_ascii=False), encoding="utf-8")
         media.unlink()
         audio.unlink()
-    for score, time, category, excerpt in options[:4]:
+    rendered = 0
+    for score, time, category, excerpt in options[:8]:
+        if rendered >= 4:
+            break
         candidate = {
             "id": f"kick-clip-coringa-vod-{video}-{time}",
             "source": "Kick", "channel": "LOUD Coringa", "channelSlug": "coringa",
@@ -124,7 +127,8 @@ def main():
             subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(clip / "clip.mp4"),
                             "-vf", "fps=1,scale=160:-1,tile=6x6:margin=4:padding=3", "-frames:v",
                             "1", str(clip / "quadros.jpg")], check=True)
-        except (ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+            rendered += 1
+        except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
             print(f"Corte {time} aguardando revisão: {type(error).__name__}", flush=True)
     print(f"{length} segundos analisados; {len(options)} candidatos para revisão.")
 

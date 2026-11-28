@@ -86,7 +86,34 @@ def download(candidate, output):
         command.extend(["--download-sections", f"*{start}-{start + candidate['duration']}", "--force-keyframes-at-cuts"])
     elif candidate["source"] == "Twitch" and source.hostname not in {"clips.twitch.tv", "www.twitch.tv", "twitch.tv"}:
         raise ValueError("Unexpected Twitch clip URL")
-    run(*command, "-o", output, candidate["url"])
+    if not is_kick_replay:
+        run(*command, "-o", output, candidate["url"])
+        return
+    for number, selector in enumerate(("b[height<=720][acodec!=none]", "worst[acodec!=none]")):
+        trial = output.with_name(f"source-attempt-{number}.mp4")
+        command[command.index("-f") + 1] = selector
+        try:
+            subprocess.run([*command, "-o", str(trial), candidate["url"]],
+                           check=True, timeout=120, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            media_duration(trial)
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            continue
+        trial.replace(output)
+        return
+    raise RuntimeError("Kick replay returned no usable audio/video interval")
+
+
+def media_duration(source):
+    metadata = probe(source)
+    streams = {stream.get("codec_type") for stream in metadata.get("streams", [])}
+    value = metadata.get("format", {}).get("duration")
+    try:
+        seconds = float(value)
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError("Downloaded media has no duration") from exc
+    if not math.isfinite(seconds) or seconds < 30 or not {"audio", "video"} <= streams:
+        raise RuntimeError("Downloaded media has no usable audio/video interval")
+    return seconds
 
 
 def natural_english(text):
@@ -251,7 +278,7 @@ def produce(candidate, output):
     working.mkdir(exist_ok=True)
     source = working / "source.mp4"
     download(candidate, source)
-    length = min(float(candidate["duration"]), float(probe(source)["format"]["duration"]))
+    length = min(float(candidate["duration"]), media_duration(source))
     if length < 30 or length > 45:
         raise RuntimeError("Downloaded interval has an invalid duration")
     rows, language, translator = transcribe(source, length, working)
